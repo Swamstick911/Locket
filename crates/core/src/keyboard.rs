@@ -211,8 +211,15 @@ impl Keyboard {
     }
 
     /// Replace the current partial word with `word` and a trailing space.
+    ///
+    /// If the replacement would not fit in the draft buffer, the draft is left
+    /// unchanged rather than partially rewritten.
     fn accept_word(&mut self, word: &str) {
         let start = self.prefix_start();
+        let kept = start; // bytes before the partial word
+        if kept + word.len() + 1 > BUF {
+            return; // won't fit — leave the draft intact
+        }
         while self.buf.len() > start {
             self.buf.pop();
         }
@@ -309,6 +316,28 @@ mod tests {
         tap(&mut k, S, &p);
         tap(&mut k, J, &p);
         assert_eq!(k.text(), "hello ");
+    }
+
+    #[test]
+    fn accepting_a_word_that_would_overflow_leaves_draft_intact() {
+        // A 20-char candidate that won't fit once the draft is nearly full.
+        let p = StaticPredictor::new(&["aardvarkaardvarkaard"]);
+        let mut k = Keyboard::new();
+        // Fill the draft with "a " pairs up to 248 bytes.
+        for _ in 0..124 {
+            tap(&mut k, W, &p); // group abcd
+            tap(&mut k, W, &p); // 'a'
+            tap(&mut k, L, &p); // space
+        }
+        // Start a fresh partial word "a"; candidates now hold the long word.
+        tap(&mut k, W, &p);
+        tap(&mut k, W, &p); // 'a'
+        let before = heapless::String::<{ BUF }>::try_from(k.text()).unwrap();
+        assert_eq!(k.candidates().len(), 1);
+        // Enter letter state and try to accept the (too-long) candidate.
+        tap(&mut k, S, &p);
+        tap(&mut k, I, &p); // accept candidate 0 → must no-op, not corrupt
+        assert_eq!(k.text(), before.as_str());
     }
 
     #[test]

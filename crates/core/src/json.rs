@@ -7,7 +7,9 @@
 //!   `content_block_delta` SSE payload, decoding JSON escapes incrementally.
 //!
 //! These avoid a full JSON parser to keep code size and RAM down; the shapes we
-//! consume are fixed and small.
+//! consume are fixed and small. Structural matching is safe because any `"`
+//! inside a JSON string value is escaped as `\"`, so an unescaped `"key"` only
+//! ever appears as a real key.
 
 use heapless::String;
 
@@ -45,8 +47,20 @@ pub fn escape_into<const N: usize>(s: &str, out: &mut String<N>) -> Result<(), (
     Ok(())
 }
 
+/// Read exactly four hex digits from `it`, returning the value.
+fn read_hex4(it: &mut core::str::Chars<'_>) -> Option<u32> {
+    let mut cp = 0u32;
+    for _ in 0..4 {
+        cp = cp * 16 + it.next()?.to_digit(16)?;
+    }
+    Some(cp)
+}
+
 /// Decode a JSON string body (the characters *after* the opening quote) into
 /// `out`, stopping at the unescaped closing quote. Returns `true` on success.
+///
+/// Handles the standard escapes plus `\uXXXX`, including UTF-16 surrogate pairs
+/// (`😀` → 😀) so astral-plane characters survive.
 pub fn decode_string_body<const N: usize>(s: &str, out: &mut String<N>) -> bool {
     let mut it = s.chars();
     loop {
@@ -70,21 +84,10 @@ pub fn decode_string_body<const N: usize>(s: &str, out: &mut String<N>) -> bool 
                     't' => '\t',
                     'b' => '\u{08}',
                     'f' => '\u{0C}',
-                    'u' => {
-                        let mut cp: u32 = 0;
-                        for _ in 0..4 {
-                            let h = match it.next() {
-                                Some(c) => c,
-                                None => return false,
-                            };
-                            let v = match h.to_digit(16) {
-                                Some(v) => v,
-                                None => return false,
-                            };
-                            cp = cp * 16 + v;
-                        }
-                        core::char::from_u32(cp).unwrap_or('\u{FFFD}')
-                    }
+                    'u' => match decode_u_escape(&mut it) {
+                        Some(ch) => ch,
+                        None => return false,
+                    },
                     other => other,
                 };
                 if out.push(decoded).is_err() {
@@ -97,6 +100,47 @@ pub fn decode_string_body<const N: usize>(s: &str, out: &mut String<N>) -> bool 
                 }
             }
         }
+    }
+}
+
+/// Decode the four hex digits after a `\u`, combining a surrogate pair if the
+/// first unit is a high surrogate. The leading `\u` has already been consumed.
+fn decode_u_escape(it: &mut core::str::Chars<'_>) -> Option<char> {
+    let hi = read_hex4(it)?;
+    if (0xD800..=0xDBFF).contains(&hi) {
+        // High surrogate: expect a following \uXXXX low surrogate.
+        if it.next()? != '\\' || it.next()? != 'u' {
+            return Some('\u{FFFD}');
+        }
+        let lo = read_hex4(it)?;
+        if (0xDC00..=0xDFFF).contains(&lo) {
+            let cp = 0x10000 + ((hi - 0xD800) << 10) + (lo - 0xDC00);
+            Some(core::char::from_u32(cp).unwrap_or('\u{FFFD}'))
+        } else {
+            Some('\u{FFFD}')
+        }
+    } else {
+        Some(core::char::from_u32(hi).unwrap_or('\u{FFFD}'))
+    }
+}
+
+/// Value of the top-level `"type"` field of an SSE frame, or `""` if absent.
+///
+/// The first `"type"` in an Anthropic frame is always the top-level event type
+/// (`content_block_delta`, `message_stop`, `error`, …); these tokens contain no
+/// escapes, so a plain slice is enough.
+pub fn frame_type(json: &str) -> &str {
+    let after = match json.find("\"type\"") {
+        Some(i) => &json[i + "\"type\"".len()..],
+        None => return "",
+    };
+    let body = match after.find('"') {
+        Some(i) => &after[i + 1..],
+        None => return "",
+    };
+    match body.find('"') {
+        Some(i) => &body[..i],
+        None => "",
     }
 }
 
@@ -159,9 +203,36 @@ mod tests {
     }
 
     #[test]
+    fn decodes_surrogate_pair() {
+        // The escaped JSON contains the UTF-16 surrogate pair for U+1F600.
+        let data = "{\"delta\":{\"type\":\"text_delta\",\"text\":\"hi \\uD83D\\uDE00!\"}}";
+        let mut out: String<256> = String::new();
+        assert!(extract_text_delta(data, &mut out));
+        assert_eq!(out.as_str(), "hi \u{1F600}!");
+    }
+
+    #[test]
+    fn decodes_bmp_unicode_escape() {
+        let data = "{\"delta\":{\"type\":\"text_delta\",\"text\":\"caf\\u00e9\"}}";
+        let mut out: String<256> = String::new();
+        assert!(extract_text_delta(data, &mut out));
+        assert_eq!(out.as_str(), "caf\u{e9}");
+    }
+
+    #[test]
     fn ignores_non_text_delta() {
         let data = r#"{"delta":{"type":"input_json_delta","partial_json":"{\"a\":1}"}}"#;
         let mut out: String<256> = String::new();
         assert!(!extract_text_delta(data, &mut out));
+    }
+
+    #[test]
+    fn frame_type_reads_top_level() {
+        assert_eq!(
+            frame_type(r#"{"type":"content_block_delta","delta":{"type":"text_delta"}}"#),
+            "content_block_delta"
+        );
+        assert_eq!(frame_type(r#"{"type":"message_stop"}"#), "message_stop");
+        assert_eq!(frame_type(r#"{"index":0}"#), "");
     }
 }

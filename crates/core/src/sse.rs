@@ -22,6 +22,10 @@ pub enum SseOut {
 }
 
 /// Classify one SSE line. On [`SseOut::Delta`], `delta` holds the new text.
+///
+/// Control frames are recognised by their top-level `"type"` field, so reply
+/// text that merely *mentions* `message_stop` or `error` is never mistaken for
+/// a control frame.
 pub fn process_line(line: &str, delta: &mut String<256>) -> SseOut {
     let line = line.trim_end_matches('\r');
     let rest = match line.strip_prefix("data:") {
@@ -29,18 +33,21 @@ pub fn process_line(line: &str, delta: &mut String<256>) -> SseOut {
         None => return SseOut::None, // `event:` lines, comments, blanks
     };
     if rest == "[DONE]" {
-        return SseOut::Stop;
+        return SseOut::Stop; // OpenAI-style terminator
     }
-    if rest.contains("\"type\":\"error\"") {
-        return SseOut::Error;
+    match json::frame_type(rest) {
+        "error" => SseOut::Error,
+        "message_stop" => SseOut::Stop,
+        // content_block_delta (and any frame without a recognised top-level
+        // type, e.g. abbreviated test payloads) may carry a text delta.
+        _ => {
+            if json::extract_text_delta(rest, delta) {
+                SseOut::Delta
+            } else {
+                SseOut::None
+            }
+        }
     }
-    if rest.contains("\"type\":\"message_stop\"") {
-        return SseOut::Stop;
-    }
-    if json::extract_text_delta(rest, delta) {
-        return SseOut::Delta;
-    }
-    SseOut::None
 }
 
 #[cfg(test)]
@@ -83,8 +90,18 @@ mod tests {
     #[test]
     fn handles_trailing_cr() {
         let mut d: String<256> = String::new();
-        let line = "data: {\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\r";
+        let line = "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\r";
         assert_eq!(process_line(line, &mut d), SseOut::Delta);
         assert_eq!(d.as_str(), "ok");
+    }
+
+    #[test]
+    fn reply_text_mentioning_control_types_is_not_misclassified() {
+        // The model's own output talks about the message_stop event. Because the
+        // quotes inside the delta text are escaped, this is a normal text delta.
+        let mut d: String<256> = String::new();
+        let line = r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"emit \"type\":\"message_stop\" to end"}}"#;
+        assert_eq!(process_line(line, &mut d), SseOut::Delta);
+        assert_eq!(d.as_str(), "emit \"type\":\"message_stop\" to end");
     }
 }
