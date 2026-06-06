@@ -72,11 +72,13 @@ const CLICK_HZ: u32 = 1_000;
 /// Click duration (ms). A brief soft tick, within the 10–20 ms spec.
 const CLICK_MS: u32 = 14;
 
-/// "Reply ready" chime: a short rising 3-note arpeggio (A5, C#6, E6 — an A-major
-/// triad) at ~70 ms per note. Pleasant and clearly distinct from the click.
-const CHIME_NOTES_HZ: [u32; 3] = [880, 1109, 1319];
+/// "Reply ready" chime: a soft, low descending two-note ding (E5 → C5), played
+/// as a mellow triangle wave at reduced volume — gentle and clearly not an alarm.
+const CHIME_NOTES_HZ: [u32; 2] = [659, 523];
 /// Per-note duration (ms) for the chime.
-const CHIME_NOTE_MS: u32 = 70;
+const CHIME_NOTE_MS: u32 = 90;
+/// Chime peak magnitude — quieter than the click so it never sounds urgent.
+const CHIME_AMPLITUDE: i16 = 3200;
 
 /// The audio output: a configured PIO1 state machine plus its DMA channel,
 /// ready to stream I2S frames to the MAX98357A.
@@ -124,29 +126,32 @@ impl Audio {
     /// been clocked out, then leaves the line silent.
     pub async fn play_click(&mut self) {
         let frames = ms_to_frames(CLICK_MS);
-        self.play_tone(CLICK_HZ, frames).await;
+        self.play_tone(CLICK_HZ, frames, AMPLITUDE, false).await;
         self.silence().await;
     }
 
-    /// Play the short "reply ready" chime (a rising A-major arpeggio). Awaits
-    /// until the whole chime has played, then leaves the line silent.
+    /// Play the short, gentle "reply ready" chime. Awaits until the whole chime
+    /// has played, then leaves the line silent.
     pub async fn play_chime(&mut self) {
         let frames = ms_to_frames(CHIME_NOTE_MS);
         for &hz in CHIME_NOTES_HZ.iter() {
-            self.play_tone(hz, frames).await;
+            self.play_tone(hz, frames, CHIME_AMPLITUDE, true).await;
         }
         self.silence().await;
     }
 
-    /// Synthesise and stream `frames` stereo frames of a square wave at `hz`,
-    /// with a short linear fade-in/out to suppress click artefacts at the edges.
-    async fn play_tone(&mut self, hz: u32, frames: u32) {
-        // Half-period in frames: the square wave flips sign every half period.
-        // Guard against div-by-zero / absurdly high tones.
+    /// Synthesise and stream `frames` stereo frames of a tone at `hz`, peak
+    /// magnitude `amp`. `triangle` selects a mellow triangle wave (few harmonics,
+    /// soft) instead of the brighter square wave. A short linear fade-in/out
+    /// suppresses click artefacts at the edges.
+    async fn play_tone(&mut self, hz: u32, frames: u32, amp: i16, triangle: bool) {
+        // Half-period in frames; guard against div-by-zero / absurdly high tones.
         let half_period = (SAMPLE_RATE / hz.max(1) / 2).max(1);
+        let period = half_period * 2;
         // Fade ramp length (frames) — ~1.5 ms, clamped to at most a third of the
         // tone so very short tones still fade.
         let ramp = (SAMPLE_RATE / 666).min(frames / 3).max(1);
+        let a = amp as i32;
 
         let mut emitted: u32 = 0;
         let mut buf = [0u32; CHUNK];
@@ -154,14 +159,22 @@ impl Audio {
             let n = core::cmp::min(CHUNK as u32, frames - emitted) as usize;
             for (i, slot) in buf.iter_mut().enumerate().take(n) {
                 let idx = emitted + i as u32;
-                // Square wave: +A for the first half period, -A for the second.
-                let base = if (idx / half_period) & 1 == 0 {
-                    AMPLITUDE
+                let base: i32 = if triangle {
+                    // Triangle: ramp -a..+a over the first half period, back down
+                    // over the second — far softer than a square edge.
+                    let phase = (idx % period) as i32;
+                    let half = half_period as i32;
+                    if phase < half {
+                        -a + 2 * a * phase / half
+                    } else {
+                        a - 2 * a * (phase - half) / half
+                    }
+                } else if (idx / half_period) & 1 == 0 {
+                    a
                 } else {
-                    -AMPLITUDE
+                    -a
                 };
-                // Linear fade in over the first `ramp` frames and out over the
-                // last `ramp` frames, so the tone starts/ends without a pop.
+                // Linear fade in/out so the tone starts/ends without a pop.
                 let gain_num = if idx < ramp {
                     idx + 1
                 } else if idx >= frames - ramp {
@@ -169,7 +182,7 @@ impl Audio {
                 } else {
                     ramp
                 };
-                let sample = ((base as i32) * (gain_num as i32) / (ramp as i32)) as i16;
+                let sample = (base * gain_num as i32 / ramp as i32) as i16;
                 *slot = stereo_word(sample);
             }
             self.sm

@@ -406,13 +406,22 @@ async fn main(spawner: Spawner) {
                                 &mut lcd, &mut net, &settings, &history,
                             )
                             .await;
-                            if let Ok(ref r) = reply {
-                                push_turn(&mut history, Role::Assistant, r);
-                                audio.play_chime().await;
-                            }
                             last_reply.clear();
-                            if let Ok(r) = reply {
-                                let _ = last_reply.push_str(&r);
+                            match reply {
+                                Ok(r) => {
+                                    push_turn(&mut history, Role::Assistant, &r);
+                                    let _ = last_reply.push_str(&r);
+                                    audio.play_chime().await;
+                                    // Clear the draft so the next turn starts fresh
+                                    // (otherwise the old prompt lingers and re-sends).
+                                    kb.set_text("");
+                                }
+                                Err(_) => {
+                                    // Failed: drop the user turn so the chat isn't
+                                    // wedged, and keep the draft so the user can
+                                    // retry. The error is already shown on screen.
+                                    let _ = history.pop();
+                                }
                             }
                             mode = Mode::ShowingResponse(0);
                             break; // reply is up; don't process stale queued events
