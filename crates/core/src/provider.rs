@@ -9,6 +9,44 @@ use crate::json;
 use core::fmt::Write;
 use heapless::String;
 
+/// A chat message role for multi-turn requests.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Role {
+    System,
+    User,
+    Assistant,
+}
+
+impl Role {
+    fn as_str(self) -> &'static str {
+        match self {
+            Role::System => "system",
+            Role::User => "user",
+            Role::Assistant => "assistant",
+        }
+    }
+}
+
+/// Append one `{"role":..,"content":..}` object into an OpenAI-style `messages`
+/// array, with a leading comma after the first element.
+fn write_msg<const N: usize>(
+    out: &mut String<N>,
+    role: &str,
+    content: &str,
+    first: &mut bool,
+) -> Result<(), ()> {
+    if !*first {
+        out.push(',').map_err(|_| ())?;
+    }
+    *first = false;
+    out.push_str("{\"role\":\"").map_err(|_| ())?;
+    out.push_str(role).map_err(|_| ())?;
+    out.push_str("\",\"content\":\"").map_err(|_| ())?;
+    json::escape_into(content, out)?;
+    out.push_str("\"}").map_err(|_| ())?;
+    Ok(())
+}
+
 /// A hosted LLM the terminal can stream from.
 pub trait LlmProvider {
     /// API host, e.g. `api.anthropic.com`.
@@ -85,6 +123,34 @@ impl<'a> OpenRouter<'a> {
             max_tokens: 1024,
         }
     }
+
+    /// Build a streaming chat-completions body from an optional system prompt
+    /// and an ordered list of conversation turns (for multi-turn chat).
+    pub fn build_chat_body<const N: usize>(
+        &self,
+        system: Option<&str>,
+        turns: &[(Role, &str)],
+        out: &mut String<N>,
+    ) -> Result<(), ()> {
+        out.clear();
+        out.push_str("{\"model\":\"").map_err(|_| ())?;
+        out.push_str(self.model).map_err(|_| ())?;
+        write!(
+            out,
+            "\",\"max_tokens\":{},\"stream\":true,\"messages\":[",
+            self.max_tokens
+        )
+        .map_err(|_| ())?;
+        let mut first = true;
+        if let Some(sys) = system {
+            write_msg(out, "system", sys, &mut first)?;
+        }
+        for (role, text) in turns {
+            write_msg(out, role.as_str(), text, &mut first)?;
+        }
+        out.push_str("]}").map_err(|_| ())?;
+        Ok(())
+    }
 }
 
 impl LlmProvider for OpenRouter<'_> {
@@ -97,18 +163,7 @@ impl LlmProvider for OpenRouter<'_> {
     }
 
     fn build_body<const N: usize>(&self, prompt: &str, out: &mut String<N>) -> Result<(), ()> {
-        out.clear();
-        out.push_str("{\"model\":\"").map_err(|_| ())?;
-        out.push_str(self.model).map_err(|_| ())?;
-        write!(
-            out,
-            "\",\"max_tokens\":{},\"stream\":true,\"messages\":[{{\"role\":\"user\",\"content\":\"",
-            self.max_tokens
-        )
-        .map_err(|_| ())?;
-        json::escape_into(prompt, out)?;
-        out.push_str("\"}]}").map_err(|_| ())?;
-        Ok(())
+        self.build_chat_body(None, &[(Role::User, prompt)], out)
     }
 
     fn extract_delta(&self, data_json: &str, out: &mut String<256>) -> bool {
@@ -158,6 +213,26 @@ mod tests {
         );
         assert_eq!(r.host(), "openrouter.ai");
         assert_eq!(r.path(), "/api/v1/chat/completions");
+    }
+
+    #[test]
+    fn builds_multi_turn_body() {
+        let r = OpenRouter::new("m");
+        let mut b: String<512> = String::new();
+        r.build_chat_body(
+            Some("be brief"),
+            &[
+                (Role::User, "hi"),
+                (Role::Assistant, "hello"),
+                (Role::User, "bye"),
+            ],
+            &mut b,
+        )
+        .unwrap();
+        assert_eq!(
+            b.as_str(),
+            r#"{"model":"m","max_tokens":1024,"stream":true,"messages":[{"role":"system","content":"be brief"},{"role":"user","content":"hi"},{"role":"assistant","content":"hello"},{"role":"user","content":"bye"}]}"#
+        );
     }
 
     #[test]

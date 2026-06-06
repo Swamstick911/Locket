@@ -40,6 +40,8 @@ pub enum Outcome {
     Send,
     /// User asked to expand the draft shorthand via the LLM.
     Expand,
+    /// User asked to open the settings menu.
+    Settings,
 }
 
 /// The keyboard. Owns the draft buffer, caps state, and current candidates.
@@ -216,10 +218,22 @@ impl Keyboard {
                 self.repredict(predictor);
                 Outcome::Redraw
             }
-            // I = symbols/numbers layer (v2 placeholder); L = released w/o action.
-            Button::I => Outcome::Redraw,
+            // I = open the settings menu; L = released without an action.
+            Button::I => Outcome::Settings,
             Button::L => Outcome::Idle,
         }
+    }
+
+    /// Replace the whole draft (e.g. when "Expand with AI" swaps in a rewrite).
+    /// Resets transient state and returns to compose.
+    pub fn set_text(&mut self, text: &str) {
+        self.buf.clear();
+        let _ = self.buf.push_str(text);
+        self.state = State::Compose;
+        self.action_armed = false;
+        self.caps = false;
+        self.space_accept = None;
+        self.cands.clear();
     }
 
     fn push_char(&mut self, ch: char) {
@@ -346,6 +360,19 @@ mod tests {
         assert_eq!(tap(&mut k, A, &p), Outcome::Send);
         hold(&mut k, L, &p);
         assert_eq!(tap(&mut k, S, &p), Outcome::Expand);
+        hold(&mut k, L, &p);
+        assert_eq!(tap(&mut k, I, &p), Outcome::Settings);
+    }
+
+    #[test]
+    fn set_text_replaces_draft() {
+        let p = StaticPredictor::new(&[]);
+        let mut k = Keyboard::new();
+        tap(&mut k, W, &p);
+        tap(&mut k, W, &p); // 'a'
+        k.set_text("hello world");
+        assert_eq!(k.text(), "hello world");
+        assert!(k.active_group().is_none());
     }
 
     #[test]

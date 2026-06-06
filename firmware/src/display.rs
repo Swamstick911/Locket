@@ -331,7 +331,7 @@ impl Ui {
         D: DrawTarget<Color = Rgb565>,
     {
         Self::text(target, "W=back A=send S=expand", 2, GUIDE_TOP, WARN)?;
-        Self::text(target, "D=caps I=sym J=newline", 2, GUIDE_TOP + 11, WARN)?;
+        Self::text(target, "D=caps I=set J=newline", 2, GUIDE_TOP + 11, WARN)?;
         Self::text(target, "K=clear  L=cancel", 2, GUIDE_TOP + 22, WARN)?;
         Ok(())
     }
