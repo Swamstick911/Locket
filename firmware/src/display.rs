@@ -325,6 +325,127 @@ impl Ui {
         Ok(())
     }
 
+    /// Full-screen response view with a vertical scroll offset (in wrapped
+    /// lines). Like [`response`], but instead of always showing the tail it
+    /// renders a window starting at `scroll_lines` from the top of the wrapped
+    /// body. The offset is clamped to the content so scrolling past the end is a
+    /// no-op (the last screenful stays put). Used by the ShowingResponse mode so
+    /// the user can read a long reply top-to-bottom with W/I (up) and S/K (down).
+    pub fn response_scrolled<D>(
+        target: &mut D,
+        header: &str,
+        body: &str,
+        scroll_lines: usize,
+    ) -> Result<(), D::Error>
+    where
+        D: DrawTarget<Color = Rgb565>,
+    {
+        target.clear(BG)?;
+        Self::text(target, header, 2, STATUS_TOP + 2, ACCENT)?;
+        Self::hline(target, DRAFT_TOP - 1, DIM)?;
+
+        const COLS: usize = (WIDTH as usize) / 6;
+        const LINE_H: i32 = 11;
+        let max_rows = ((HEIGHT as i32 - (DRAFT_TOP + 2)) / LINE_H) as usize;
+        let style = MonoTextStyle::new(&FONT_6X10, FG);
+
+        // Wrap the whole body into rows (char-wrap + honor '\n'). Keep a bounded
+        // window of rows; the buffer holds the most recent 128 rows which is more
+        // than the 2 KiB response can produce at 26 cols (~80 rows max).
+        let mut rows: heapless::Vec<String<COLS>, 256> = heapless::Vec::new();
+        let mut cur: String<COLS> = String::new();
+        for ch in body.chars() {
+            if ch == '\n' || cur.len() >= COLS {
+                if rows.push(cur.clone()).is_err() {
+                    rows.remove(0);
+                    let _ = rows.push(cur.clone());
+                }
+                cur.clear();
+                if ch == '\n' {
+                    continue;
+                }
+            }
+            let _ = cur.push(ch);
+        }
+        if rows.push(cur.clone()).is_err() {
+            rows.remove(0);
+            let _ = rows.push(cur);
+        }
+
+        // Clamp the start so the last screenful is the furthest we can scroll.
+        let max_start = rows.len().saturating_sub(max_rows);
+        let start = scroll_lines.min(max_start);
+        let end = (start + max_rows).min(rows.len());
+
+        let mut y = DRAFT_TOP + 2;
+        for row in &rows[start..end] {
+            Text::with_baseline(row, Point::new(2, y), style, Baseline::Top).draw(target)?;
+            y += LINE_H;
+        }
+        Ok(())
+    }
+
+    /// Number of wrapped rows the body produces, and how many fit on one screen.
+    /// The main loop uses this to clamp the scroll offset for
+    /// [`response_scrolled`] without re-wrapping itself. Returns
+    /// `(total_rows, visible_rows)`.
+    pub fn wrapped_row_count(body: &str) -> (usize, usize) {
+        const COLS: usize = (WIDTH as usize) / 6;
+        const LINE_H: i32 = 11;
+        let max_rows = ((HEIGHT as i32 - (DRAFT_TOP + 2)) / LINE_H) as usize;
+        let mut rows: usize = 1;
+        let mut col: usize = 0;
+        for ch in body.chars() {
+            if ch == '\n' || col >= COLS {
+                rows += 1;
+                col = 0;
+                if ch == '\n' {
+                    continue;
+                }
+            }
+            col += 1;
+        }
+        (rows, max_rows)
+    }
+
+    /// A simple vertical settings menu: a title bar plus a list of items, with
+    /// the `selected` row highlighted. Items are pre-formatted by the caller
+    /// (e.g. "Model: deepseek/deepseek-chat"). Long items are truncated to the
+    /// panel width. Used by the Settings mode.
+    pub fn menu<D>(
+        target: &mut D,
+        title: &str,
+        items: &[&str],
+        selected: usize,
+    ) -> Result<(), D::Error>
+    where
+        D: DrawTarget<Color = Rgb565>,
+    {
+        target.clear(BG)?;
+        Self::text(target, title, 2, STATUS_TOP + 2, ACCENT)?;
+        Self::hline(target, DRAFT_TOP - 1, DIM)?;
+
+        const COLS: usize = (WIDTH as usize) / 6;
+        const LINE_H: i32 = 11;
+        let mut y = DRAFT_TOP + 3;
+        for (i, item) in items.iter().enumerate() {
+            let selected = i == selected;
+            // Build a "> item" / "  item" row, truncated to the panel width.
+            let mut row: String<COLS> = String::new();
+            let _ = row.push_str(if selected { ">" } else { " " });
+            for ch in item.chars() {
+                if row.len() >= COLS {
+                    break;
+                }
+                let _ = row.push(ch);
+            }
+            let color = if selected { ACCENT } else { FG };
+            Self::text(target, &row, 2, y, color)?;
+            y += LINE_H;
+        }
+        Ok(())
+    }
+
     /// Action layer (after Hold L): label each button's action.
     fn draw_action_layer<D>(target: &mut D) -> Result<(), D::Error>
     where

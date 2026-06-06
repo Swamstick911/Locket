@@ -48,7 +48,7 @@ use reqwless::headers::ContentType;
 use reqwless::request::{Method, RequestBuilder};
 use static_cell::StaticCell;
 
-use sprig_llm_core::provider::{LlmProvider, OpenRouter};
+use sprig_llm_core::provider::{LlmProvider, OpenRouter, Role};
 use sprig_llm_core::sse::{process_openai_line, SseOut};
 
 use crate::config;
@@ -86,7 +86,7 @@ const TCP_RX: usize = 8 * 1024;
 
 /// Largest prompt body we will build (JSON-escaped). Comfortably covers a
 /// full-screen draft plus the Expand instruction prefix.
-const BODY_CAP: usize = 2048;
+const BODY_CAP: usize = 4096;
 
 /// Errors surfaced to the UI. Kept coarse — the screen only needs a short label.
 #[derive(Debug, Clone, Copy, defmt::Format)]
@@ -215,26 +215,74 @@ impl Net {
         self.control.gpio_set(0, on).await;
     }
 
-    /// Stream a single Claude completion for `prompt`.
+    /// Stream a single OpenRouter completion for `prompt` (single-turn).
     ///
-    /// Builds the request body with the core [`Claude`] provider, POSTs it to
-    /// `https://api.anthropic.com/v1/messages` over TLS 1.3, and feeds the
-    /// streamed SSE body to the core [`process_line`] classifier. `on_delta` is
-    /// called with each new text fragment as it arrives; it must not block.
+    /// Builds the request body with the core [`OpenRouter`] provider (the default
+    /// `config::MODEL` and 1024 max tokens), POSTs it over TLS 1.3, and feeds the
+    /// streamed SSE body to the core classifier. `on_delta` is called with each
+    /// new text fragment as it arrives; it must not block.
     ///
-    /// Returns `Ok(())` on a clean `message_stop`, or a [`NetError`].
-    pub async fn send_prompt<F>(&mut self, prompt: &str, mut on_delta: F) -> Result<(), NetError>
+    /// Returns `Ok(())` on a clean stop event, or a [`NetError`]. Implemented as
+    /// a thin wrapper over [`send_chat`] so both share one request/stream path.
+    #[allow(dead_code)] // kept as the single-turn public convenience API
+    pub async fn send_prompt<F>(&mut self, prompt: &str, on_delta: F) -> Result<(), NetError>
     where
         F: FnMut(&str),
     {
-        let provider = OpenRouter::new(config::MODEL);
+        self.send_chat(
+            config::MODEL,
+            1024,
+            None,
+            &[(Role::User, prompt)],
+            on_delta,
+        )
+        .await
+    }
 
+    /// Stream a multi-turn chat completion.
+    ///
+    /// Builds the body from `model` + `max_tokens` + an optional `system` prompt
+    /// + the ordered `turns` via [`OpenRouter::build_chat_body`], then POSTs and
+    /// streams it exactly like [`send_prompt`] used to. `on_delta` receives each
+    /// text fragment as it arrives; it must not block. Returns `Ok(())` on a
+    /// clean stop, or a [`NetError`].
+    pub async fn send_chat<F>(
+        &mut self,
+        model: &str,
+        max_tokens: u32,
+        system: Option<&str>,
+        turns: &[(Role, &str)],
+        on_delta: F,
+    ) -> Result<(), NetError>
+    where
+        F: FnMut(&str),
+    {
         // --- Build the JSON body via the core crate (escaping + "stream":true). ---
+        let mut provider = OpenRouter::new(model);
+        provider.max_tokens = max_tokens;
         let mut body: String<BODY_CAP> = String::new();
         provider
-            .build_body(prompt, &mut body)
+            .build_chat_body(system, turns, &mut body)
             .map_err(|_| NetError::BodyTooLarge)?;
 
+        self.post_and_stream(provider.host(), provider.path(), &body, on_delta)
+            .await
+    }
+
+    /// Shared transport: open TLS to `host`, POST `body` to `path`, and stream
+    /// the SSE response, handing each text delta to `on_delta`. Both
+    /// [`send_prompt`] and [`send_chat`] funnel through here so the three stream
+    /// fixes (status check, UTF-8 line decode, over-long-line skip) live once.
+    async fn post_and_stream<F>(
+        &mut self,
+        host: &str,
+        path: &str,
+        body: &str,
+        mut on_delta: F,
+    ) -> Result<(), NetError>
+    where
+        F: FnMut(&str),
+    {
         // --- TLS + TCP + DNS clients over the embassy-net stack. ---
         let mut tls_rx = [0u8; TLS_RX];
         let mut tls_tx = [0u8; TLS_TX];
@@ -254,8 +302,8 @@ impl Net {
         // Full URL = scheme://host/path. host()/path() come from the provider.
         let mut url: String<96> = String::new();
         url.push_str("https://").map_err(|_| NetError::Transport)?;
-        url.push_str(provider.host()).map_err(|_| NetError::Transport)?;
-        url.push_str(provider.path()).map_err(|_| NetError::Transport)?;
+        url.push_str(host).map_err(|_| NetError::Transport)?;
+        url.push_str(path).map_err(|_| NetError::Transport)?;
 
         let mut http_buf = [0u8; HTTP_BUF];
 
