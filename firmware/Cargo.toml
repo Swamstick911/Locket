@@ -37,7 +37,11 @@ embassy-executor = { version = "0.6", features = [
     "arch-cortex-m",
     "executor-thread",
     "integrated-timers",
-    "task-arena-size-32768",
+    # The main task's future holds the streaming-HTTPS locals (8 KiB TLS rx +
+    # 8 KiB TLS tx + a 4 KiB HTTP buffer + smaller bufs), so the task arena must
+    # comfortably exceed ~24 KiB. 64 KiB leaves headroom for the cyw43/net tasks
+    # too (264 KiB SRAM total). Tune down with on-device measurement.
+    "task-arena-size-65536",
 ] }
 # embassy-rp 0.2 is RP2040-only (no `rp2040` chip-select feature; that arrived
 # with RP2350 support in 0.3+). `boot2-w25q080` selects the second-stage
@@ -53,6 +57,41 @@ embassy-rp = { version = "0.2", features = [
 embassy-time = { version = "0.3", features = ["tick-hz-1_000_000"] }
 embassy-sync = "0.6"
 embassy-futures = "0.1"
+
+# --- WiFi + networking (Milestone 2). ---
+# cyw43 0.2.0 / cyw43-pio 0.2.0 are the releases that pin to embassy-rp 0.2,
+# embassy-time 0.3.2 and embassy-sync 0.6 (verified via crates.io dependency
+# metadata) — newer cyw43 (0.3+) require embassy-rp 0.3+ / RP2350 support.
+cyw43 = { version = "0.2.0", features = ["defmt", "firmware-logs"] }
+cyw43-pio = { version = "0.2.0", features = ["defmt"] }
+# embassy-net 0.4.0 uses embassy-net-driver 0.2 (matching cyw43's
+# embassy-net-driver-channel 0.3, which also targets driver 0.2), embassy-time
+# 0.3 and smoltcp 0.11. `tcp` + `dhcpv4` + `dns` + `proto-ipv4` are what the
+# HTTPS client needs; `medium-ethernet` matches cyw43's NetDriver.
+embassy-net = { version = "0.4.0", features = [
+    "defmt",
+    "tcp",
+    "dhcpv4",
+    "dns",
+    "proto-ipv4",
+    "medium-ethernet",
+] }
+
+# Async HTTP(S) client. reqwless 0.12.1 brings embedded-tls 0.17 (TLS 1.3 only)
+# via the `embedded-tls` feature and is alloc-free. embedded-io-async 0.6 is its
+# streaming-read trait, used to pump the SSE body line-by-line.
+reqwless = { version = "0.12.1", default-features = false, features = [
+    "embedded-tls",
+    "defmt",
+] }
+embedded-io-async = "0.6"
+embedded-nal-async = "0.7"
+
+# Hardware RNG for the TLS seed (RP2040 ring-oscillator TRNG via embassy-rp).
+rand_core = "0.6"
+# `StaticCell` gives us the `&'static mut` storage that the cyw43 State, the
+# embassy-net Stack resources, and the network task all require.
+static_cell = "2"
 
 # --- embedded-hal traits (SPI/GPIO abstraction the display driver needs). ---
 embedded-hal = "1.0"

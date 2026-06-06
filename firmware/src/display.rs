@@ -273,6 +273,58 @@ impl Ui {
         Ok(())
     }
 
+    /// Full-screen "response view": a header banner plus wrapped body text.
+    ///
+    /// Milestone 2 uses this to show the streamed LLM reply. `header` is a short
+    /// status line (e.g. "Streaming..." / "Done" / "Error"); `body` is the
+    /// accumulated response text, word-naively wrapped to the panel width. Only
+    /// the tail that fits on screen is shown (older text scrolls off the top),
+    /// so the caller can pass an ever-growing buffer cheaply.
+    pub fn response<D>(target: &mut D, header: &str, body: &str) -> Result<(), D::Error>
+    where
+        D: DrawTarget<Color = Rgb565>,
+    {
+        target.clear(BG)?;
+        Self::text(target, header, 2, STATUS_TOP + 2, ACCENT)?;
+        Self::hline(target, DRAFT_TOP - 1, DIM)?;
+
+        const COLS: usize = (WIDTH as usize) / 6;
+        const LINE_H: i32 = 11;
+        // Rows that fit between the header and the bottom edge.
+        let max_rows = ((HEIGHT as i32 - (DRAFT_TOP + 2)) / LINE_H) as usize;
+        let style = MonoTextStyle::new(&FONT_6X10, FG);
+
+        // First pass: lay out into rows (char-wrap + honor '\n'), keeping only
+        // the last `max_rows` so the freshest text is always visible.
+        let mut rows: heapless::Vec<String<COLS>, 64> = heapless::Vec::new();
+        let mut cur: String<COLS> = String::new();
+        for ch in body.chars() {
+            if ch == '\n' || cur.len() >= COLS {
+                if rows.push(cur.clone()).is_err() {
+                    rows.remove(0);
+                    let _ = rows.push(cur.clone());
+                }
+                cur.clear();
+                if ch == '\n' {
+                    continue;
+                }
+            }
+            let _ = cur.push(ch);
+        }
+        if rows.push(cur.clone()).is_err() {
+            rows.remove(0);
+            let _ = rows.push(cur);
+        }
+
+        let start = rows.len().saturating_sub(max_rows);
+        let mut y = DRAFT_TOP + 2;
+        for row in &rows[start..] {
+            Text::with_baseline(row, Point::new(2, y), style, Baseline::Top).draw(target)?;
+            y += LINE_H;
+        }
+        Ok(())
+    }
+
     /// Action layer (after Hold L): label each button's action.
     fn draw_action_layer<D>(target: &mut D) -> Result<(), D::Error>
     where

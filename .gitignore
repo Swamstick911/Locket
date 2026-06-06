@@ -10,3 +10,8 @@ Cargo.lock
 
 # Generated firmware images
 *.uf2
+
+# Local firmware secrets (WiFi creds + Anthropic API key). Copy
+# firmware/src/config.example.rs -> firmware/src/config.rs and fill in real
+# values; the real file must NEVER be committed.
+/firmware/src/config.rs
