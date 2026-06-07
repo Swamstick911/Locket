@@ -539,6 +539,7 @@ where
         attempt += 1;
         acc.clear();
         let mut got_delta = false;
+        let mut painted_len = 0usize;
         let _ = Ui::response(
             lcd,
             if attempt == 1 { "Streaming..." } else { "Retrying..." },
@@ -557,7 +558,14 @@ where
                             break;
                         }
                     }
-                    let _ = Ui::response(lcd, "Streaming...", &acc);
+                    // The redraw is a blocking full-screen SPI paint; doing it on
+                    // every token starves the WiFi/TCP tasks and drops the stream.
+                    // Repaint at most every ~24 new chars; the final paint below
+                    // always shows the complete reply.
+                    if acc.len() >= painted_len + 24 {
+                        painted_len = acc.len();
+                        let _ = Ui::response(lcd, "Streaming...", &acc);
+                    }
                 },
             )
             .await;
