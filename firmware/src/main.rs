@@ -101,6 +101,9 @@ struct Settings {
     max_tokens: usize,
     /// Highlighted menu row (for navigation).
     cursor: usize,
+    /// Transient per-session system-prompt override set by starting a game from
+    /// the menu. Takes precedence over the persona; NOT persisted to flash.
+    system_override: Option<&'static str>,
 }
 
 impl Settings {
@@ -110,6 +113,7 @@ impl Settings {
             persona: 0,
             max_tokens: 2, // default 1024
             cursor: 0,
+            system_override: None,
         }
     }
 
@@ -118,6 +122,11 @@ impl Settings {
     }
     fn persona(&self) -> Option<&'static str> {
         PERSONAS[self.persona].1
+    }
+    /// The effective system prompt: a game override if one is active, otherwise
+    /// the selected persona. Fed to `send_chat` as the `system` argument.
+    fn system(&self) -> Option<&'static str> {
+        self.system_override.or_else(|| self.persona())
     }
     fn max_tokens(&self) -> u32 {
         MAX_TOKENS[self.max_tokens]
@@ -135,13 +144,37 @@ const QUICK_PROMPTS: &[(&str, &str)] = &[
     ("Brainstorm", "Brainstorm ideas about: "),
 ];
 
+/// AI game personas: (menu label, system prompt, kickoff draft loaded into the
+/// keyboard). Selecting one sets a transient `system_override` and primes the
+/// draft so the user just presses Send to begin.
+const GAMES: &[(&str, &str, &str)] = &[
+    (
+        "Play: Adventure",
+        "You are the game master of a short interactive text adventure. Keep each reply under 60 words and end with 2-3 numbered choices.",
+        "Start the adventure.",
+    ),
+    (
+        "Play: 20 Questions",
+        "Let's play 20 Questions. I am thinking of an object; ask me yes/no questions one at a time to guess it, and count your questions.",
+        "Let's play.",
+    ),
+    (
+        "Play: Trivia",
+        "You are a trivia host. Ask one multiple-choice question at a time (A-D). After my answer, say if I was right and ask the next question.",
+        "Start the trivia.",
+    ),
+];
+
 const ROW_MODEL: usize = 0;
 const ROW_PERSONA: usize = 1;
 const ROW_TOKENS: usize = 2;
 const ROW_NEWCONV: usize = 3;
 /// Quick-prompt rows occupy `[QUICK_BASE, QUICK_BASE + QUICK_PROMPTS.len())`.
 const QUICK_BASE: usize = 4;
-const ROW_BACK: usize = QUICK_BASE + QUICK_PROMPTS.len();
+/// Game rows occupy `[GAMES_BASE, GAMES_BASE + GAMES.len())`, after the quick
+/// prompts and before Back.
+const GAMES_BASE: usize = QUICK_BASE + QUICK_PROMPTS.len();
+const ROW_BACK: usize = GAMES_BASE + GAMES.len();
 const MENU_ROWS: usize = ROW_BACK + 1;
 
 /// Top-level UI mode.
@@ -408,6 +441,9 @@ async fn main(spawner: Spawner) {
                                     ROW_PERSONA => {
                                         settings.persona =
                                             (settings.persona + 1) % PERSONAS.len();
+                                        // Choosing a persona ends any game mode so
+                                        // normal chat resumes.
+                                        settings.system_override = None;
                                         save_now = true;
                                     }
                                     ROW_TOKENS => {
@@ -417,14 +453,28 @@ async fn main(spawner: Spawner) {
                                     }
                                     ROW_NEWCONV => {
                                         history.clear();
+                                        // A fresh conversation also leaves game mode.
+                                        settings.system_override = None;
                                         save_now = true;
                                         let _ = audio.play_click().await;
                                     }
                                     ROW_BACK => exit = true,
-                                    q if q >= QUICK_BASE && q < ROW_BACK => {
+                                    q if q >= QUICK_BASE && q < GAMES_BASE => {
                                         // Load the canned prompt into the draft and
                                         // return to the keyboard to edit / send it.
                                         kb.set_text(QUICK_PROMPTS[q - QUICK_BASE].1);
+                                        exit = true;
+                                    }
+                                    q if q >= GAMES_BASE && q < ROW_BACK => {
+                                        // Start a game: set the transient system
+                                        // override, clear history, prime the draft
+                                        // with the kickoff line, and exit to the
+                                        // keyboard so the user just presses Send.
+                                        let (_, sys, kick) = GAMES[q - GAMES_BASE];
+                                        settings.system_override = Some(sys);
+                                        history.clear();
+                                        kb.set_text(kick);
+                                        save_now = true;
                                         exit = true;
                                     }
                                     _ => {}
@@ -562,6 +612,9 @@ where
     for (name, _) in QUICK_PROMPTS {
         let _ = items.push(name);
     }
+    for (label, _, _) in GAMES {
+        let _ = items.push(label);
+    }
     let _ = items.push("Back");
     let _ = Ui::menu(lcd, "Settings (A/L/D=use/change)", &items, settings.cursor);
 }
@@ -646,7 +699,7 @@ where
             .send_chat(
                 settings.model(),
                 settings.max_tokens(),
-                settings.persona(),
+                settings.system(),
                 &turns,
                 |delta| {
                     got_delta = true;
@@ -722,7 +775,7 @@ where
         .send_chat(
             settings.model(),
             settings.max_tokens(),
-            None,
+            settings.system(),
             &[(Role::User, prompt)],
             |delta| {
                 for ch in delta.chars() {
