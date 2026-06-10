@@ -306,6 +306,8 @@ async fn main(spawner: Spawner) {
     let mut mode = Mode::Composing;
     // Holds the most recent finished reply, for scrolling in ShowingResponse.
     let mut last_reply: HString<RESPONSE_CAP> = HString::new();
+    // Running total of tokens billed across replies this power-on session.
+    let mut session_tokens: u32 = 0;
 
     // Initial paint.
     let _ = Ui::render(&mut lcd, &kb, &status);
@@ -473,6 +475,7 @@ async fn main(spawner: Spawner) {
                             push_turn(&mut history, Role::User, kb.text());
                             let reply = stream_chat_to_screen(
                                 &mut lcd, &mut net, &settings, &history,
+                                &mut session_tokens,
                             )
                             .await;
                             last_reply.clear();
@@ -611,6 +614,7 @@ async fn stream_chat_to_screen<D>(
     net: &mut Net,
     settings: &Settings,
     history: &[Turn],
+    session_tokens: &mut u32,
 ) -> Result<HString<RESPONSE_CAP>, ()>
 where
     D: embedded_graphics::draw_target::DrawTarget<Color = embedded_graphics::pixelcolor::Rgb565>,
@@ -674,8 +678,19 @@ where
     net.set_led(false).await;
 
     match result {
-        Ok(()) => {
-            let _ = Ui::response(lcd, "Done  D=type  L=back", &acc);
+        Ok(reply_tokens) => {
+            // Accumulate this reply's tokens into the running session total and
+            // show both in the header (reply this turn / running sum).
+            *session_tokens = session_tokens.saturating_add(reply_tokens);
+            let mut hdr: HString<32> = HString::new();
+            // Prefer the spaced form; fall back to a compact one if it would be
+            // too wide for the header row.
+            let _ = write!(hdr, "{}t  sum {}t  L=back", reply_tokens, *session_tokens);
+            if hdr.len() > 26 {
+                hdr.clear();
+                let _ = write!(hdr, "{}t/{}t  L=back", reply_tokens, *session_tokens);
+            }
+            let _ = Ui::response(lcd, &hdr, &acc);
             Ok(acc)
         }
         Err(e) => {
@@ -723,7 +738,8 @@ where
     net.set_led(false).await;
 
     match result {
-        Ok(()) => Ok(acc),
+        // Expand's header stays as-is; the token count is unused here.
+        Ok(_) => Ok(acc),
         Err(e) => {
             let mut hdr: HString<32> = HString::new();
             let _ = write!(hdr, "Error: {:?}", e);

@@ -49,7 +49,7 @@ use reqwless::request::{Method, RequestBuilder};
 use static_cell::StaticCell;
 
 use sprig_llm_core::provider::{LlmProvider, OpenRouter, Role};
-use sprig_llm_core::sse::{process_openai_line, SseOut};
+use sprig_llm_core::sse::{process_openai_line, usage_total, SseOut};
 
 use crate::config;
 
@@ -222,10 +222,11 @@ impl Net {
     /// streamed SSE body to the core classifier. `on_delta` is called with each
     /// new text fragment as it arrives; it must not block.
     ///
-    /// Returns `Ok(())` on a clean stop event, or a [`NetError`]. Implemented as
-    /// a thin wrapper over [`send_chat`] so both share one request/stream path.
+    /// Returns the total token count reported by the stream (0 if none) on a
+    /// clean stop event, or a [`NetError`]. Implemented as a thin wrapper over
+    /// [`send_chat`] so both share one request/stream path.
     #[allow(dead_code)] // kept as the single-turn public convenience API
-    pub async fn send_prompt<F>(&mut self, prompt: &str, on_delta: F) -> Result<(), NetError>
+    pub async fn send_prompt<F>(&mut self, prompt: &str, on_delta: F) -> Result<u32, NetError>
     where
         F: FnMut(&str),
     {
@@ -244,8 +245,9 @@ impl Net {
     /// Builds the body from `model` + `max_tokens` + an optional `system` prompt
     /// + the ordered `turns` via [`OpenRouter::build_chat_body`], then POSTs and
     /// streams it exactly like [`send_prompt`] used to. `on_delta` receives each
-    /// text fragment as it arrives; it must not block. Returns `Ok(())` on a
-    /// clean stop, or a [`NetError`].
+    /// text fragment as it arrives; it must not block. Returns the total token
+    /// count reported by the stream (0 if none) on a clean stop, or a
+    /// [`NetError`].
     pub async fn send_chat<F>(
         &mut self,
         model: &str,
@@ -253,7 +255,7 @@ impl Net {
         system: Option<&str>,
         turns: &[(Role, &str)],
         on_delta: F,
-    ) -> Result<(), NetError>
+    ) -> Result<u32, NetError>
     where
         F: FnMut(&str),
     {
@@ -279,7 +281,7 @@ impl Net {
         path: &str,
         body: &str,
         mut on_delta: F,
-    ) -> Result<(), NetError>
+    ) -> Result<u32, NetError>
     where
         F: FnMut(&str),
     {
@@ -344,6 +346,9 @@ impl Net {
         let mut delta: String<256> = String::new();
         // True while discarding the rest of an over-long line up to the next '\n'.
         let mut skipping = false;
+        // Latest `usage.total_tokens` seen (the final chunk reports it); 0 if the
+        // stream never carried a usage object.
+        let mut total: u32 = 0;
 
         loop {
             let n = reader.read(&mut chunk).await.map_err(|_| NetError::Transport)?;
@@ -356,9 +361,14 @@ impl Net {
                         if let Ok(text) = core::str::from_utf8(&line) {
                             match process_openai_line(text, &mut delta) {
                                 SseOut::Delta => on_delta(&delta),
-                                SseOut::Stop => return Ok(()),
+                                SseOut::Stop => return Ok(total),
                                 SseOut::Error => return Err(NetError::StreamError),
                                 SseOut::None => {}
+                            }
+                            // The usage chunk arrives alongside (or just before)
+                            // the terminator; stash the latest count seen.
+                            if let Some(t) = usage_total(text) {
+                                total = t;
                             }
                         }
                     }
@@ -381,8 +391,11 @@ impl Net {
                     SseOut::Error => return Err(NetError::StreamError),
                     _ => {}
                 }
+                if let Some(t) = usage_total(text) {
+                    total = t;
+                }
             }
         }
-        Ok(())
+        Ok(total)
     }
 }
