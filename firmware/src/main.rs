@@ -368,7 +368,7 @@ async fn main(spawner: Spawner) {
     let mut session_tokens: u32 = 0;
 
     // Initial paint.
-    let _ = Ui::render(&mut lcd, &kb, &status);
+    let _ = Ui::render(&mut lcd, &kb, PERSONAS[settings.persona].0, &status);
 
     // --- Main loop: scan → dispatch by mode → redraw on change. ---
     let tick = Duration::from_millis(input::TICK_MS);
@@ -415,7 +415,7 @@ async fn main(spawner: Spawner) {
                 }
                 if dismiss {
                     mode = Mode::Composing;
-                    let _ = Ui::render(&mut lcd, &kb, &status);
+                    let _ = Ui::render(&mut lcd, &kb, PERSONAS[settings.persona].0, &status);
                 } else {
                     if type_pc {
                         let _ = Ui::response_scrolled(&mut lcd, "Typing to PC...", &last_reply, scroll);
@@ -551,7 +551,7 @@ async fn main(spawner: Spawner) {
                 }
                 if exit {
                     mode = Mode::Composing;
-                    let _ = Ui::render(&mut lcd, &kb, &status);
+                    let _ = Ui::render(&mut lcd, &kb, PERSONAS[settings.persona].0, &status);
                 } else if redraw {
                     draw_menu(&mut lcd, &settings, &history);
                 }
@@ -624,7 +624,7 @@ async fn main(spawner: Spawner) {
                                     audio.play_chime().await;
                                     kb.set_text(&r);
                                     // Repaint the keyboard with the rewritten draft.
-                                    let _ = Ui::render(&mut lcd, &kb, &status);
+                                    let _ = Ui::render(&mut lcd, &kb, PERSONAS[settings.persona].0, &status);
                                 }
                                 Err(_) => {
                                     // Error already shown on screen; keep it up
@@ -639,7 +639,7 @@ async fn main(spawner: Spawner) {
                 }
                 if dirty {
                     audio.play_click().await; // one soft click per visible change
-                    let _ = Ui::render(&mut lcd, &kb, &status);
+                    let _ = Ui::render(&mut lcd, &kb, PERSONAS[settings.persona].0, &status);
                 }
             }
         }

@@ -66,14 +66,15 @@ impl Ui {
 
     /// Redraw every zone from the current keyboard state.
     ///
+    /// `title` is typically the active AI persona name.
     /// `status` is an optional banner (Send/Expand placeholders); pass an empty
     /// string for the default step prompt.
-    pub fn render<D>(target: &mut D, kb: &Keyboard, status: &str) -> Result<(), D::Error>
+    pub fn render<D>(target: &mut D, kb: &Keyboard, title: &str, status: &str) -> Result<(), D::Error>
     where
         D: DrawTarget<Color = Rgb565>,
     {
         target.clear(BG)?;
-        Self::draw_status(target, kb, status)?;
+        Self::draw_status(target, kb, title, status)?;
         Self::draw_draft(target, kb)?;
         Self::draw_guide(target, kb)?;
         Ok(())
@@ -98,25 +99,55 @@ impl Ui {
         Ok(())
     }
 
-    /// Status bar: a step prompt that tells the user exactly what to do next,
-    /// plus a CAPS indicator.
-    fn draw_status<D>(target: &mut D, kb: &Keyboard, status: &str) -> Result<(), D::Error>
+    fn draw_scrollbar<D>(target: &mut D, start_row: usize, visible_rows: usize, total_rows: usize) -> Result<(), D::Error>
     where
         D: DrawTarget<Color = Rgb565>,
     {
+        if total_rows <= visible_rows {
+            return Ok(());
+        }
+
+        let area_h = HEIGHT as i32 - DRAFT_TOP - 2;
+        let bar_h = (area_h * visible_rows as i32 / total_rows as i32).max(4);
+        let bar_y = DRAFT_TOP + 2 + (area_h - bar_h) * start_row as i32 / (total_rows - visible_rows) as i32;
+        
+        Rectangle::new(Point::new(WIDTH as i32 - 3, bar_y), Size::new(2, bar_h as u32))
+            .into_styled(PrimitiveStyle::with_fill(ACCENT))
+            .draw(target)?;
+        Ok(())
+    }
+
+    /// Status bar: a step prompt that tells the user exactly what to do next,
+    /// plus a CAPS indicator and the active AI Persona.
+    fn draw_status<D>(target: &mut D, kb: &Keyboard, title: &str, status: &str) -> Result<(), D::Error>
+    where
+        D: DrawTarget<Color = Rgb565>,
+    {
+        // Header background.
+        Rectangle::new(Point::new(0, 0), Size::new(WIDTH, DRAFT_TOP as u32 - 1))
+            .into_styled(PrimitiveStyle::with_fill(Rgb565::CSS_DARK_SLATE_GRAY))
+            .draw(target)?;
+
         let (label, color) = if !status.is_empty() {
             (status, WARN)
         } else if kb.action_armed() {
             ("ACTION: pick one", WARN)
         } else if kb.active_group().is_some() {
-            ("STEP 2: pick the letter", ACCENT)
+            ("STEP 2: pick letter", ACCENT)
         } else {
-            ("STEP 1: tap a group", ACCENT)
+            (title, FG)
         };
-        Self::text(target, label, 2, STATUS_TOP + 2, color)?;
+        
+        let mut final_label: String<32> = String::new();
+        if label == title {
+            let _ = write!(final_label, "AI: {}", label);
+        } else {
+            let _ = final_label.push_str(label);
+        }
 
-        // Right side: CAPS flag + a live suggestion count (also a handy
-        // indicator that prediction is firing).
+        Self::text(target, &final_label, 2, STATUS_TOP + 2, if !status.is_empty() || kb.action_armed() { color } else { FG })?;
+
+        // Right side: CAPS flag + a live suggestion count.
         let mut right: String<12> = String::new();
         if kb.caps() {
             let _ = right.push_str("CAPS ");
@@ -285,7 +316,11 @@ impl Ui {
         D: DrawTarget<Color = Rgb565>,
     {
         target.clear(BG)?;
-        Self::text(target, header, 2, STATUS_TOP + 2, ACCENT)?;
+        // Header background.
+        Rectangle::new(Point::new(0, 0), Size::new(WIDTH, DRAFT_TOP as u32 - 1))
+            .into_styled(PrimitiveStyle::with_fill(Rgb565::CSS_DARK_SLATE_GRAY))
+            .draw(target)?;
+        Self::text(target, header, 2, STATUS_TOP + 2, FG)?;
         Self::hline(target, DRAFT_TOP - 1, DIM)?;
 
         const COLS: usize = (WIDTH as usize) / 6;
@@ -345,6 +380,11 @@ impl Ui {
         const LINE_H: i32 = 11;
         let max_rows = ((HEIGHT as i32 - (DRAFT_TOP + 2)) / LINE_H) as usize;
 
+        // Header background.
+        Rectangle::new(Point::new(0, 0), Size::new(WIDTH, DRAFT_TOP as u32 - 1))
+            .into_styled(PrimitiveStyle::with_fill(Rgb565::CSS_DARK_SLATE_GRAY))
+            .draw(target)?;
+
         let body_style = MonoTextStyleBuilder::new()
             .font(&FONT_6X10)
             .text_color(FG)
@@ -352,8 +392,8 @@ impl Ui {
             .build();
         let header_style = MonoTextStyleBuilder::new()
             .font(&FONT_6X10)
-            .text_color(ACCENT)
-            .background_color(BG)
+            .text_color(FG)
+            .background_color(Rgb565::CSS_DARK_SLATE_GRAY)
             .build();
 
         // Header, padded to full width so a shorter header overwrites the old one.
@@ -427,7 +467,11 @@ impl Ui {
         D: DrawTarget<Color = Rgb565>,
     {
         target.clear(BG)?;
-        Self::text(target, header, 2, STATUS_TOP + 2, ACCENT)?;
+        // Header background.
+        Rectangle::new(Point::new(0, 0), Size::new(WIDTH, DRAFT_TOP as u32 - 1))
+            .into_styled(PrimitiveStyle::with_fill(Rgb565::CSS_DARK_SLATE_GRAY))
+            .draw(target)?;
+        Self::text(target, header, 2, STATUS_TOP + 2, FG)?;
         Self::hline(target, DRAFT_TOP - 1, DIM)?;
 
         const COLS: usize = (WIDTH as usize) / 6;
@@ -468,6 +512,8 @@ impl Ui {
             Text::with_baseline(row, Point::new(2, y), style, Baseline::Top).draw(target)?;
             y += LINE_H;
         }
+
+        Self::draw_scrollbar(target, start, max_rows, rows.len())?;
         Ok(())
     }
 
