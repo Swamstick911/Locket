@@ -1,22 +1,24 @@
-//! The ST7735 LCD and the keyboard renderer.
+//! The ST7735 LCD renderer + the theme system.
 //!
 //! The Sprig screen is a 160x128 ST7735, driven over `SPI0` with the
-//! `st7735-lcd` driver (an embedded-graphics `DrawTarget` in `Rgb565`). The
-//! layout mirrors the [`Keyboard`] state and, crucially, guides the user
-//! through the two-tap entry method:
+//! `st7735-lcd` driver (an embedded-graphics `DrawTarget` in `Rgb565`). Every
+//! screen shares one structure — a header bar, a 1px divider, a content area,
+//! and (on the list/reply views) a footer hint bar that always shows what the
+//! buttons do:
 //!
 //! ```text
 //! +------------------------------------------+  y=0
-//! | <step prompt>                 CAPS        |   status bar
-//! +------------------------------------------+  y=14
-//! | draft text (the message being composed)  |   draft (wraps)
-//! +------------------------------------------+  y=92
-//! | step 1 (compose): suggestions + the      |
-//! |   group->button map                      |   guidance zone
-//! | step 2 (letter):  the chosen group's     |
-//! |   letters arranged like the D-pad        |
+//! | HEADER: title              wifi  caps    |   surface bar
+//! +------------------------------------------+  y=13   1px divider
+//! | content (draft / reply / menu)           |
+//! +------------------------------------------+  y=114  1px divider
+//! | FOOTER: button legend                    |   hint bar (lists/reply)
 //! +------------------------------------------+  y=128
 //! ```
+//!
+//! Colours come from a [`Theme`] passed into every draw call, so the whole UI
+//! restyles by swapping ~10 colours. Three themes ship: [`PHOSPHOR`] (default),
+//! [`MODERN_DARK`], and [`GAME_BOY`].
 //!
 //! The renderer is allocation-free and `no_std`: all strings are built into
 //! fixed `heapless` buffers.
@@ -24,7 +26,10 @@
 use core::fmt::Write as _;
 
 use embedded_graphics::{
-    mono_font::{ascii::FONT_6X10, MonoTextStyle, MonoTextStyleBuilder},
+    mono_font::{
+        ascii::{FONT_10X20, FONT_6X10},
+        MonoTextStyle, MonoTextStyleBuilder,
+    },
     pixelcolor::Rgb565,
     prelude::*,
     primitives::{PrimitiveStyle, Rectangle},
@@ -37,17 +42,98 @@ use sprig_llm_core::keyboard::Keyboard;
 pub const WIDTH: u32 = 160;
 pub const HEIGHT: u32 = 128;
 
-// Zone boundaries (top y of each band).
+// Layout bands (top y of each region).
 const STATUS_TOP: i32 = 0;
-const DRAFT_TOP: i32 = 14;
-const GUIDE_TOP: i32 = 92;
+const DRAFT_TOP: i32 = 14; // content top (just below the header divider at y=13)
+const GUIDE_TOP: i32 = 92; // compose-mode guidance zone
 
-// A small palette.
-const BG: Rgb565 = Rgb565::BLACK;
-const FG: Rgb565 = Rgb565::WHITE;
-const ACCENT: Rgb565 = Rgb565::CSS_DODGER_BLUE;
-const DIM: Rgb565 = Rgb565::CSS_DIM_GRAY;
-const WARN: Rgb565 = Rgb565::CSS_ORANGE;
+// Footer hint bar (used by the menu + reply views).
+const FOOTER_H: i32 = 13;
+const FOOTER_TOP: i32 = HEIGHT as i32 - FOOTER_H; // 115
+const FOOTER_DIV: i32 = FOOTER_TOP - 1; // 114 — divider above the footer
+
+const COLS: usize = (WIDTH as usize) / 6; // 26 monospace columns
+const LINE_H: i32 = 11;
+
+/// Content rows that fit on a list/reply screen (header + footer reserved).
+const CONTENT_ROWS: usize = ((FOOTER_DIV - (DRAFT_TOP + 2)) / LINE_H) as usize; // 8
+
+/// Build an `Rgb565` from 8-bit-per-channel hex (truncated to 5/6/5 bits).
+const fn rgb(r: u8, g: u8, b: u8) -> Rgb565 {
+    Rgb565::new(r >> 3, g >> 2, b >> 3)
+}
+
+/// A palette: ~10 colours that fully define a theme's look. Roles are named by
+/// *function* so light themes (Game Boy) map as cleanly as dark ones.
+#[derive(Clone, Copy)]
+pub struct Theme {
+    /// Page background.
+    pub bg: Rgb565,
+    /// Header / footer bar fill, and the selected-row highlight bar.
+    pub surface: Rgb565,
+    /// Text drawn on top of `surface` (header titles, selected row).
+    pub on_surface: Rgb565,
+    /// Primary body text on `bg`.
+    pub text: Rgb565,
+    /// Secondary / structural text on `bg`.
+    pub dim: Rgb565,
+    /// 1px dividers, slider tracks, input frames, inactive icons.
+    pub divider: Rgb565,
+    /// Focus rail, active highlights, caret, active icon, chip fill.
+    pub accent: Rgb565,
+    /// Text drawn on top of an `accent` fill (focused chip).
+    pub on_accent: Rgb565,
+    /// Errors / alerts.
+    pub warn: Rgb565,
+    /// Display name (shown in the Settings "Theme" row).
+    pub name: &'static str,
+}
+
+/// Retro green-phosphor terminal (default). Near-monochrome, very legible.
+pub const PHOSPHOR: Theme = Theme {
+    bg: rgb(0x0A, 0x14, 0x0A),
+    surface: rgb(0x0F, 0x3D, 0x1E),
+    on_surface: rgb(0xAF, 0xFF, 0xC0),
+    text: rgb(0x33, 0xFF, 0x66),
+    dim: rgb(0x1F, 0x8A, 0x3A),
+    divider: rgb(0x16, 0x52, 0x2A),
+    accent: rgb(0xAF, 0xFF, 0xC0),
+    on_accent: rgb(0x0A, 0x14, 0x0A),
+    warn: rgb(0xFF, 0xB0, 0x00),
+    name: "Phosphor",
+};
+
+/// Clean modern dark theme: off-black surfaces, off-white text, cyan accent.
+pub const MODERN_DARK: Theme = Theme {
+    bg: rgb(0x12, 0x12, 0x12),
+    surface: rgb(0x24, 0x24, 0x24),
+    on_surface: rgb(0xE6, 0xE6, 0xE6),
+    text: rgb(0xE6, 0xE6, 0xE6),
+    dim: rgb(0x9A, 0xA0, 0xA6),
+    divider: rgb(0x3A, 0x3A, 0x3A),
+    accent: rgb(0x4D, 0xD0, 0xE1),
+    on_accent: rgb(0x12, 0x12, 0x12),
+    warn: rgb(0xFF, 0x6B, 0x6B),
+    name: "Modern Dark",
+};
+
+/// Playful Game Boy duotone (light background, dark text).
+pub const GAME_BOY: Theme = Theme {
+    bg: rgb(0x9B, 0xBC, 0x0F),
+    surface: rgb(0x30, 0x62, 0x30),
+    on_surface: rgb(0x9B, 0xBC, 0x0F),
+    text: rgb(0x0F, 0x38, 0x0F),
+    dim: rgb(0x30, 0x62, 0x30),
+    divider: rgb(0x30, 0x62, 0x30),
+    accent: rgb(0x0F, 0x38, 0x0F),
+    on_accent: rgb(0x9B, 0xBC, 0x0F),
+    warn: rgb(0xC2, 0x60, 0x3A),
+    name: "Game Boy",
+};
+
+/// All selectable themes, in the order they cycle in Settings. Index 0 is the
+/// default. Keep in sync with the persisted theme index.
+pub const THEMES: &[Theme] = &[PHOSPHOR, MODERN_DARK, GAME_BOY];
 
 /// A short, transient status message (e.g. "SENDING").
 pub type Status = String<24>;
@@ -56,29 +142,15 @@ pub type Status = String<24>;
 pub struct Ui;
 
 impl Ui {
-    /// Clear the whole screen to the background color.
-    pub fn clear<D>(target: &mut D) -> Result<(), D::Error>
+    /// Clear the whole screen to the theme background.
+    pub fn clear<D>(target: &mut D, theme: &Theme) -> Result<(), D::Error>
     where
         D: DrawTarget<Color = Rgb565>,
     {
-        target.clear(BG)
+        target.clear(theme.bg)
     }
 
-    /// Redraw every zone from the current keyboard state.
-    ///
-    /// `title` is typically the active AI persona name.
-    /// `status` is an optional banner (Send/Expand placeholders); pass an empty
-    /// string for the default step prompt.
-    pub fn render<D>(target: &mut D, kb: &Keyboard, title: &str, status: &str) -> Result<(), D::Error>
-    where
-        D: DrawTarget<Color = Rgb565>,
-    {
-        target.clear(BG)?;
-        Self::draw_status(target, kb, title, status)?;
-        Self::draw_draft(target, kb)?;
-        Self::draw_guide(target, kb)?;
-        Ok(())
-    }
+    // -- small primitives -------------------------------------------------
 
     fn text<D>(target: &mut D, s: &str, x: i32, y: i32, color: Rgb565) -> Result<(), D::Error>
     where
@@ -89,94 +161,181 @@ impl Ui {
         Ok(())
     }
 
-    fn hline<D>(target: &mut D, y: i32, color: Rgb565) -> Result<(), D::Error>
+    /// Faux-bold (draw twice, offset 1px) for headers — gives hierarchy without
+    /// shipping a second body font.
+    fn text_bold<D>(target: &mut D, s: &str, x: i32, y: i32, color: Rgb565) -> Result<(), D::Error>
     where
         D: DrawTarget<Color = Rgb565>,
     {
-        Rectangle::new(Point::new(0, y), Size::new(WIDTH, 1))
+        Self::text(target, s, x, y, color)?;
+        Self::text(target, s, x + 1, y, color)?;
+        Ok(())
+    }
+
+    fn fill<D>(target: &mut D, x: i32, y: i32, w: u32, h: u32, color: Rgb565) -> Result<(), D::Error>
+    where
+        D: DrawTarget<Color = Rgb565>,
+    {
+        Rectangle::new(Point::new(x, y), Size::new(w, h))
             .into_styled(PrimitiveStyle::with_fill(color))
             .draw(target)?;
         Ok(())
     }
 
-    fn draw_scrollbar<D>(target: &mut D, start_row: usize, visible_rows: usize, total_rows: usize) -> Result<(), D::Error>
+    fn hline<D>(target: &mut D, y: i32, color: Rgb565) -> Result<(), D::Error>
     where
         D: DrawTarget<Color = Rgb565>,
     {
-        if total_rows <= visible_rows {
-            return Ok(());
-        }
+        Self::fill(target, 0, y, WIDTH, 1, color)
+    }
 
-        let area_h = HEIGHT as i32 - DRAFT_TOP - 2;
-        let bar_h = (area_h * visible_rows as i32 / total_rows as i32).max(4);
-        let bar_y = DRAFT_TOP + 2 + (area_h - bar_h) * start_row as i32 / (total_rows - visible_rows) as i32;
-        
-        Rectangle::new(Point::new(WIDTH as i32 - 3, bar_y), Size::new(2, bar_h as u32))
-            .into_styled(PrimitiveStyle::with_fill(ACCENT))
-            .draw(target)?;
+    /// A small "wifi" logo (4 ascending bars) drawn in `color`, right-aligned so
+    /// its rightmost bar ends at `right_x`. Purely a connectivity indicator, not
+    /// a live signal meter.
+    fn wifi_icon<D>(target: &mut D, right_x: i32, color: Rgb565) -> Result<(), D::Error>
+    where
+        D: DrawTarget<Color = Rgb565>,
+    {
+        let heights = [3i32, 5, 7, 9];
+        let base_x = right_x - 11;
+        for (i, h) in heights.iter().enumerate() {
+            let x = base_x + i as i32 * 3;
+            Self::fill(target, x, 11 - h, 2, *h as u32, color)?;
+        }
         Ok(())
     }
 
-    /// Status bar: a step prompt that tells the user exactly what to do next,
-    /// plus a CAPS indicator and the active AI Persona.
-    fn draw_status<D>(target: &mut D, kb: &Keyboard, title: &str, status: &str) -> Result<(), D::Error>
+    /// Header bar: surface fill, a bold title, the wifi logo, and the divider.
+    fn header_bar<D>(target: &mut D, theme: &Theme, title: &str) -> Result<(), D::Error>
     where
         D: DrawTarget<Color = Rgb565>,
     {
-        // Header background.
-        Rectangle::new(Point::new(0, 0), Size::new(WIDTH, DRAFT_TOP as u32 - 1))
-            .into_styled(PrimitiveStyle::with_fill(Rgb565::CSS_DARK_SLATE_GRAY))
+        Self::fill(target, 0, 0, WIDTH, DRAFT_TOP as u32 - 1, theme.surface)?;
+        Self::text_bold(target, title, 3, STATUS_TOP + 2, theme.on_surface)?;
+        Self::wifi_icon(target, WIDTH as i32 - 3, theme.on_surface)?;
+        Self::hline(target, DRAFT_TOP - 1, theme.divider)?;
+        Ok(())
+    }
+
+    /// Footer hint bar: a divider then dim button-legend text.
+    fn footer_hints<D>(target: &mut D, theme: &Theme, hint: &str) -> Result<(), D::Error>
+    where
+        D: DrawTarget<Color = Rgb565>,
+    {
+        Self::hline(target, FOOTER_DIV, theme.divider)?;
+        Self::text(target, hint, 3, FOOTER_TOP + 2, theme.dim)?;
+        Ok(())
+    }
+
+    /// A boot/connection splash: a big centred title plus a dim subtitle. Uses
+    /// the larger `FONT_10X20` (its own screen, so no tight-layout risk).
+    pub fn splash<D>(target: &mut D, theme: &Theme, title: &str, subtitle: &str) -> Result<(), D::Error>
+    where
+        D: DrawTarget<Color = Rgb565>,
+    {
+        target.clear(theme.bg)?;
+        let big = MonoTextStyle::new(&FONT_10X20, theme.accent);
+        let tw = title.len() as i32 * 10;
+        Text::with_baseline(title, Point::new((WIDTH as i32 - tw) / 2, 38), big, Baseline::Top)
             .draw(target)?;
+        let sw = subtitle.len() as i32 * 6;
+        Self::text(target, subtitle, (WIDTH as i32 - sw) / 2, 72, theme.dim)?;
+        Ok(())
+    }
+
+    // -- compose / keyboard view -----------------------------------------
+
+    /// Redraw every zone of the compose screen from the keyboard state.
+    ///
+    /// `title` is the active AI persona name; `status` is an optional transient
+    /// banner (empty = show the default step prompt).
+    pub fn render<D>(
+        target: &mut D,
+        theme: &Theme,
+        kb: &Keyboard,
+        title: &str,
+        status: &str,
+    ) -> Result<(), D::Error>
+    where
+        D: DrawTarget<Color = Rgb565>,
+    {
+        target.clear(theme.bg)?;
+        Self::draw_status(target, theme, kb, title, status)?;
+        Self::draw_draft(target, theme, kb)?;
+        Self::draw_guide(target, theme, kb)?;
+        Ok(())
+    }
+
+    /// Compose-mode header: a state-aware step prompt plus CAPS + suggestion
+    /// count, all drawn on the surface bar.
+    fn draw_status<D>(
+        target: &mut D,
+        theme: &Theme,
+        kb: &Keyboard,
+        title: &str,
+        status: &str,
+    ) -> Result<(), D::Error>
+    where
+        D: DrawTarget<Color = Rgb565>,
+    {
+        Self::fill(target, 0, 0, WIDTH, DRAFT_TOP as u32 - 1, theme.surface)?;
 
         let (label, color) = if !status.is_empty() {
-            (status, WARN)
+            (status, theme.warn)
         } else if kb.action_armed() {
-            ("ACTION: pick one", WARN)
+            ("ACTION: pick one", theme.warn)
         } else if kb.active_group().is_some() {
-            ("STEP 2: pick letter", ACCENT)
+            ("STEP 2: pick letter", theme.accent)
         } else {
-            (title, FG)
+            (title, theme.on_surface)
         };
-        
+
         let mut final_label: String<32> = String::new();
         if label == title {
             let _ = write!(final_label, "AI: {}", label);
         } else {
             let _ = final_label.push_str(label);
         }
+        Self::text_bold(target, &final_label, 3, STATUS_TOP + 2, color)?;
 
-        Self::text(target, &final_label, 2, STATUS_TOP + 2, if !status.is_empty() || kb.action_armed() { color } else { FG })?;
-
-        // Right side: CAPS flag + a live suggestion count.
+        // Right side: CAPS flag + live suggestion count, left of the wifi logo.
         let mut right: String<12> = String::new();
         if kb.caps() {
             let _ = right.push_str("CAPS ");
         }
         let _ = write!(right, "s{}", kb.candidates().len());
         let w = right.len() as i32 * 6;
-        Self::text(target, &right, WIDTH as i32 - w - 2, STATUS_TOP + 2, DIM)?;
+        let right_edge = WIDTH as i32 - 16; // leave room for the wifi logo
+        Self::text(target, &right, right_edge - w, STATUS_TOP + 2, theme.on_surface)?;
+        Self::wifi_icon(target, WIDTH as i32 - 3, theme.on_surface)?;
 
-        Self::hline(target, DRAFT_TOP - 1, DIM)?;
+        Self::hline(target, DRAFT_TOP - 1, theme.divider)?;
         Ok(())
     }
 
-    /// Draft text zone with naive per-character wrapping and a block cursor.
-    fn draw_draft<D>(target: &mut D, kb: &Keyboard) -> Result<(), D::Error>
+    /// Draft zone: a framed input field with wrapped text, dim ghost completion,
+    /// and a block caret.
+    fn draw_draft<D>(target: &mut D, theme: &Theme, kb: &Keyboard) -> Result<(), D::Error>
     where
         D: DrawTarget<Color = Rgb565>,
     {
-        const COLS: usize = (WIDTH as usize) / 6;
-        const LINE_H: i32 = 11;
-        let style = MonoTextStyle::new(&FONT_6X10, FG);
+        // Input-field frame around the draft band.
+        Rectangle::new(Point::new(1, DRAFT_TOP), Size::new(WIDTH - 2, (GUIDE_TOP - 2 - DRAFT_TOP) as u32))
+            .into_styled(PrimitiveStyle::with_stroke(theme.divider, 1))
+            .draw(target)?;
 
-        let mut x = 2i32;
-        let mut y = DRAFT_TOP + 2;
+        let style = MonoTextStyle::new(&FONT_6X10, theme.text);
+        let left = 4i32;
+        let right_cols = COLS - 1; // 1 char of padding inside the frame
+
+        let mut x = left;
+        let mut y = DRAFT_TOP + 3;
         let mut col = 0usize;
         let mut buf: String<2> = String::new();
 
         for ch in kb.text().chars() {
-            if ch == '\n' || col >= COLS {
-                x = 2;
+            if ch == '\n' || col >= right_cols {
+                x = left;
                 y += LINE_H;
                 col = 0;
                 if ch == '\n' {
@@ -193,18 +352,15 @@ impl Ui {
             col += 1;
         }
 
-        // Inline "ghost" completion (iOS QuickType / fish-shell style): the
-        // not-yet-typed tail of the top suggestion, dimmed, right at the cursor.
-        // Pressing space (L) accepts it.
+        // Inline "ghost" completion: the not-yet-typed tail of the top
+        // suggestion, dimmed, right at the cursor. Pressing space (L) accepts it.
         if let Some(suffix) = kb.completion_suffix() {
-            let ghost = MonoTextStyle::new(&FONT_6X10, DIM);
+            let ghost = MonoTextStyle::new(&FONT_6X10, theme.dim);
             // A thin caret marks the boundary between typed text and the ghost.
-            Rectangle::new(Point::new(x, y), Size::new(1, 9))
-                .into_styled(PrimitiveStyle::with_fill(ACCENT))
-                .draw(target)?;
+            Self::fill(target, x, y, 1, 9, theme.accent)?;
             for ch in suffix.chars() {
-                if col >= COLS {
-                    x = 2;
+                if col >= right_cols {
+                    x = left;
                     y += LINE_H;
                     col = 0;
                 }
@@ -219,45 +375,31 @@ impl Ui {
             }
         } else if y <= GUIDE_TOP - LINE_H {
             // No completion: a solid block cursor.
-            Rectangle::new(Point::new(x, y), Size::new(6, 9))
-                .into_styled(PrimitiveStyle::with_fill(ACCENT))
-                .draw(target)?;
+            Self::fill(target, x, y, 6, 9, theme.accent)?;
         }
         Ok(())
     }
 
-    /// The guidance zone — the part that makes typing self-explanatory. It
-    /// branches on the keyboard's current step.
-    fn draw_guide<D>(target: &mut D, kb: &Keyboard) -> Result<(), D::Error>
+    /// The guidance zone — makes typing self-explanatory; branches on the step.
+    fn draw_guide<D>(target: &mut D, theme: &Theme, kb: &Keyboard) -> Result<(), D::Error>
     where
         D: DrawTarget<Color = Rgb565>,
     {
-        Self::hline(target, GUIDE_TOP - 1, DIM)?;
-
         if kb.action_armed() {
-            return Self::draw_action_layer(target);
+            return Self::draw_action_layer(target, theme);
         }
         match kb.active_group() {
-            Some(letters) => Self::draw_letter_cross(target, letters),
-            None => Self::draw_compose_guide(target, kb),
+            Some(letters) => Self::draw_letter_cross(target, theme, letters),
+            None => Self::draw_compose_guide(target, theme, kb),
         }
     }
 
-    /// Step 2: show the chosen group's letters arranged like the physical left
-    /// D-pad, so the user just presses the matching direction.
-    ///
-    /// ```text
-    ///            W:e          (up)
-    ///   A:f               D:h (left / right)
-    ///            S:g          (down)
-    /// ```
-    fn draw_letter_cross<D>(target: &mut D, letters: &str) -> Result<(), D::Error>
+    /// Step 2: the chosen group's letters arranged like the physical left D-pad.
+    fn draw_letter_cross<D>(target: &mut D, theme: &Theme, letters: &str) -> Result<(), D::Error>
     where
         D: DrawTarget<Color = Rgb565>,
     {
-        // Button label paired with the group letter at that index.
         let cells = [("W", 0usize), ("A", 1), ("S", 2), ("D", 3)];
-        // (x, y) for up / left / down / right within the guide band.
         let pos = [
             (68, GUIDE_TOP),       // W (up)
             (4, GUIDE_TOP + 11),   // A (left)
@@ -269,172 +411,137 @@ impl Ui {
                 let mut cell: String<8> = String::new();
                 let _ = write!(cell, "{}:{}", btn, ch);
                 let (x, y) = pos[i];
-                Self::text(target, &cell, x, y, ACCENT)?;
+                Self::text_bold(target, &cell, x, y, theme.accent)?;
             }
         }
         Ok(())
     }
 
-    /// Step 1: suggestions (acceptable from the right pad) plus the
-    /// group→button map so the user knows which button to tap.
-    fn draw_compose_guide<D>(target: &mut D, kb: &Keyboard) -> Result<(), D::Error>
+    /// Step 1: prediction chips (top candidates) plus the group→button map.
+    fn draw_compose_guide<D>(target: &mut D, theme: &Theme, kb: &Keyboard) -> Result<(), D::Error>
     where
         D: DrawTarget<Color = Rgb565>,
     {
-        // Line 1: predictions, each tagged with its right-pad accept button.
-        // One clear, fully-readable suggestion: pressing space (L) completes the
-        // current word to it. Showing a single word avoids the old overlap.
-        // The completion itself shows inline (ghost text) in the draft above;
-        // here we just hint the accept key, or surface the top candidate so the
-        // user always sees that prediction is working.
-        if kb.completion_suffix().is_some() {
-            Self::text(target, "space = accept word", 2, GUIDE_TOP, ACCENT)?;
-        } else if let Some(top) = kb.candidates().first() {
-            let mut s: String<30> = String::new();
-            let _ = write!(s, "~ {}", top.as_str());
-            Self::text(target, &s, 2, GUIDE_TOP, DIM)?;
+        // Line 1: up to three prediction chips. The first is the one space (L)
+        // accepts; it's filled with the accent colour. If there are none, fall
+        // back to a plain hint.
+        let candidates = kb.candidates();
+        if candidates.is_empty() {
+            Self::text(target, "L = space", 3, GUIDE_TOP, theme.dim)?;
         } else {
-            Self::text(target, "L = space", 2, GUIDE_TOP, DIM)?;
+            let mut x = 2i32;
+            for (i, word) in candidates.iter().take(3).enumerate() {
+                let w = word.len() as i32 * 6 + 6; // text + horizontal padding
+                if x + w > WIDTH as i32 - 2 {
+                    break;
+                }
+                if i == 0 {
+                    // Focused chip: accent fill, inverse text.
+                    Self::fill(target, x, GUIDE_TOP - 1, w as u32, 11, theme.accent)?;
+                    Self::text(target, word, x + 3, GUIDE_TOP, theme.on_accent)?;
+                } else {
+                    Rectangle::new(Point::new(x, GUIDE_TOP - 1), Size::new(w as u32, 11))
+                        .into_styled(PrimitiveStyle::with_stroke(theme.divider, 1))
+                        .draw(target)?;
+                    Self::text(target, word, x + 3, GUIDE_TOP, theme.text)?;
+                }
+                x += w + 3;
+            }
         }
 
         // Lines 2-3: the group → button map (which button holds which letters).
-        // Kept under 26 glyphs wide so it never runs off the 160px panel.
-        Self::text(target, "Wabcd Aefgh Sijkl Dmnop", 0, GUIDE_TOP + 11, DIM)?;
-        Self::text(target, "Iqrst Juvwx Kyz., L=spc", 0, GUIDE_TOP + 22, DIM)?;
+        Self::text(target, "Wabcd Aefgh Sijkl Dmnop", 0, GUIDE_TOP + 11, theme.dim)?;
+        Self::text(target, "Iqrst Juvwx Kyz., L=spc", 0, GUIDE_TOP + 22, theme.dim)?;
         Ok(())
     }
 
-    /// Full-screen "response view": a header banner plus wrapped body text.
-    ///
-    /// Milestone 2 uses this to show the streamed LLM reply. `header` is a short
-    /// status line (e.g. "Streaming..." / "Done" / "Error"); `body` is the
-    /// accumulated response text, word-naively wrapped to the panel width. Only
-    /// the tail that fits on screen is shown (older text scrolls off the top),
-    /// so the caller can pass an ever-growing buffer cheaply.
-    pub fn response<D>(target: &mut D, header: &str, body: &str) -> Result<(), D::Error>
+    /// Action layer (after Hold L): label each button's action.
+    fn draw_action_layer<D>(target: &mut D, theme: &Theme) -> Result<(), D::Error>
     where
         D: DrawTarget<Color = Rgb565>,
     {
-        target.clear(BG)?;
-        // Header background.
-        Rectangle::new(Point::new(0, 0), Size::new(WIDTH, DRAFT_TOP as u32 - 1))
-            .into_styled(PrimitiveStyle::with_fill(Rgb565::CSS_DARK_SLATE_GRAY))
-            .draw(target)?;
-        Self::text(target, header, 2, STATUS_TOP + 2, FG)?;
-        Self::hline(target, DRAFT_TOP - 1, DIM)?;
+        Self::text(target, "W=back A=send S=expand", 2, GUIDE_TOP, theme.warn)?;
+        Self::text(target, "D=caps I=set J=newline", 2, GUIDE_TOP + 11, theme.warn)?;
+        Self::text(target, "K=clear  L=cancel", 2, GUIDE_TOP + 22, theme.warn)?;
+        Ok(())
+    }
 
-        const COLS: usize = (WIDTH as usize) / 6;
-        const LINE_H: i32 = 11;
-        // Rows that fit between the header and the bottom edge.
+    // -- reply / response views ------------------------------------------
+
+    /// Full-screen reply view (used at the start of streaming + for errors).
+    /// Clears, draws the header, and wraps the tail of `body` to fit.
+    pub fn response<D>(target: &mut D, theme: &Theme, header: &str, body: &str) -> Result<(), D::Error>
+    where
+        D: DrawTarget<Color = Rgb565>,
+    {
+        target.clear(theme.bg)?;
+        Self::header_bar(target, theme, header)?;
+
+        // Tail view: keep only the last screenful of wrapped rows.
         let max_rows = ((HEIGHT as i32 - (DRAFT_TOP + 2)) / LINE_H) as usize;
-        let style = MonoTextStyle::new(&FONT_6X10, FG);
-
-        // First pass: lay out into rows (char-wrap + honor '\n'), keeping only
-        // the last `max_rows` so the freshest text is always visible.
+        let style = MonoTextStyle::new(&FONT_6X10, theme.text);
         let mut rows: heapless::Vec<String<COLS>, 64> = heapless::Vec::new();
-        let mut cur: String<COLS> = String::new();
-        for ch in body.chars() {
-            if ch == '\n' || cur.len() >= COLS {
-                if rows.push(cur.clone()).is_err() {
-                    rows.remove(0);
-                    let _ = rows.push(cur.clone());
-                }
-                cur.clear();
-                if ch == '\n' {
-                    continue;
-                }
-            }
-            let _ = cur.push(ch);
-        }
-        if rows.push(cur.clone()).is_err() {
-            rows.remove(0);
-            let _ = rows.push(cur);
-        }
+        wrap_into(body, &mut rows);
 
         let start = rows.len().saturating_sub(max_rows);
         let mut y = DRAFT_TOP + 2;
         for row in &rows[start..] {
-            Text::with_baseline(row, Point::new(2, y), style, Baseline::Top).draw(target)?;
+            Text::with_baseline(row, Point::new(3, y), style, Baseline::Top).draw(target)?;
             y += LINE_H;
         }
         Ok(())
     }
 
-    /// Like [`response`] but built for the streaming hot-loop — it never blanks
-    /// the panel, so the screen doesn't flash between frames.
-    ///
-    /// [`response`] clears the whole screen (a ~40 KiB SPI fill) and then draws
-    /// the text back on top; repeated every chunk while a reply streams, that
-    /// blank-then-redraw is a visible flicker, and the big bus burst starves the
-    /// WiFi task. This version instead overwrites in place: the header and every
-    /// on-screen row are drawn with an *opaque* style (each glyph paints its own
-    /// background) and padded to the full column width, so a shorter line erases
-    /// whatever was under it. No clear, no flash, and a much smaller per-frame
-    /// write. The caller should paint one clean [`response`] first (to set the
-    /// margins) and then drive updates through this.
-    pub fn response_stream<D>(target: &mut D, header: &str, body: &str) -> Result<(), D::Error>
+    /// Streaming hot-loop repaint — never blanks the panel, so it can't flicker
+    /// and won't starve the WiFi task. Overwrites the header and every visible
+    /// row in place with opaque (own-background) text, padded to full width.
+    pub fn response_stream<D>(
+        target: &mut D,
+        theme: &Theme,
+        header: &str,
+        body: &str,
+    ) -> Result<(), D::Error>
     where
         D: DrawTarget<Color = Rgb565>,
     {
-        const COLS: usize = (WIDTH as usize) / 6;
-        const LINE_H: i32 = 11;
         let max_rows = ((HEIGHT as i32 - (DRAFT_TOP + 2)) / LINE_H) as usize;
 
-        // Header background.
-        Rectangle::new(Point::new(0, 0), Size::new(WIDTH, DRAFT_TOP as u32 - 1))
-            .into_styled(PrimitiveStyle::with_fill(Rgb565::CSS_DARK_SLATE_GRAY))
-            .draw(target)?;
-
+        // Header band (surface fill + opaque title + wifi logo + divider).
+        Self::fill(target, 0, 0, WIDTH, DRAFT_TOP as u32 - 1, theme.surface)?;
         let body_style = MonoTextStyleBuilder::new()
             .font(&FONT_6X10)
-            .text_color(FG)
-            .background_color(BG)
+            .text_color(theme.text)
+            .background_color(theme.bg)
             .build();
         let header_style = MonoTextStyleBuilder::new()
             .font(&FONT_6X10)
-            .text_color(FG)
-            .background_color(Rgb565::CSS_DARK_SLATE_GRAY)
+            .text_color(theme.on_surface)
+            .background_color(theme.surface)
             .build();
 
-        // Header, padded to full width so a shorter header overwrites the old one.
+        // Header padded so a shorter header overwrites the previous one. Leave
+        // the right end clear for the wifi logo.
         let mut hdr: String<COLS> = String::new();
         for ch in header.chars() {
-            if hdr.push(ch).is_err() {
+            if hdr.len() >= COLS - 3 {
                 break;
             }
+            let _ = hdr.push(ch);
         }
-        while hdr.len() < COLS && hdr.push(' ').is_ok() {}
-        Text::with_baseline(&hdr, Point::new(2, STATUS_TOP + 2), header_style, Baseline::Top)
+        while hdr.len() < COLS - 3 && hdr.push(' ').is_ok() {}
+        Text::with_baseline(&hdr, Point::new(3, STATUS_TOP + 2), header_style, Baseline::Top)
             .draw(target)?;
-        Self::hline(target, DRAFT_TOP - 1, DIM)?;
+        Self::wifi_icon(target, WIDTH as i32 - 3, theme.on_surface)?;
+        Self::hline(target, DRAFT_TOP - 1, theme.divider)?;
 
-        // Same tail-wrap as `response`: char-wrap, honor '\n', keep the last rows.
         let mut rows: heapless::Vec<String<COLS>, 64> = heapless::Vec::new();
-        let mut cur: String<COLS> = String::new();
-        for ch in body.chars() {
-            if ch == '\n' || cur.len() >= COLS {
-                if rows.push(cur.clone()).is_err() {
-                    rows.remove(0);
-                    let _ = rows.push(cur.clone());
-                }
-                cur.clear();
-                if ch == '\n' {
-                    continue;
-                }
-            }
-            let _ = cur.push(ch);
-        }
-        if rows.push(cur.clone()).is_err() {
-            rows.remove(0);
-            let _ = rows.push(cur);
-        }
+        wrap_into(body, &mut rows);
 
         let start = rows.len().saturating_sub(max_rows);
         let visible = &rows[start..];
         let mut y = DRAFT_TOP + 2;
-        // Draw a full grid of `max_rows` rows every time, padding each to the
-        // column width and blanking any unused rows, so the body region is fully
-        // repainted in place without ever clearing the screen.
+        // Redraw a full grid every time, padding each row (and blanking unused
+        // rows) so the body region is fully repainted in place, no clear.
         for i in 0..max_rows {
             let mut line: String<COLS> = String::new();
             if let Some(row) = visible.get(i) {
@@ -445,20 +552,17 @@ impl Ui {
                 }
             }
             while line.len() < COLS && line.push(' ').is_ok() {}
-            Text::with_baseline(&line, Point::new(2, y), body_style, Baseline::Top).draw(target)?;
+            Text::with_baseline(&line, Point::new(3, y), body_style, Baseline::Top).draw(target)?;
             y += LINE_H;
         }
         Ok(())
     }
 
-    /// Full-screen response view with a vertical scroll offset (in wrapped
-    /// lines). Like [`response`], but instead of always showing the tail it
-    /// renders a window starting at `scroll_lines` from the top of the wrapped
-    /// body. The offset is clamped to the content so scrolling past the end is a
-    /// no-op (the last screenful stays put). Used by the ShowingResponse mode so
-    /// the user can read a long reply top-to-bottom with W/I (up) and S/K (down).
+    /// Scrollable reply view (the read-after-streaming mode). Renders a window
+    /// starting `scroll_lines` from the top, with a scrollbar and footer hints.
     pub fn response_scrolled<D>(
         target: &mut D,
+        theme: &Theme,
         header: &str,
         body: &str,
         scroll_lines: usize,
@@ -466,65 +570,56 @@ impl Ui {
     where
         D: DrawTarget<Color = Rgb565>,
     {
-        target.clear(BG)?;
-        // Header background.
-        Rectangle::new(Point::new(0, 0), Size::new(WIDTH, DRAFT_TOP as u32 - 1))
-            .into_styled(PrimitiveStyle::with_fill(Rgb565::CSS_DARK_SLATE_GRAY))
-            .draw(target)?;
-        Self::text(target, header, 2, STATUS_TOP + 2, FG)?;
-        Self::hline(target, DRAFT_TOP - 1, DIM)?;
+        target.clear(theme.bg)?;
+        Self::header_bar(target, theme, header)?;
 
-        const COLS: usize = (WIDTH as usize) / 6;
-        const LINE_H: i32 = 11;
-        let max_rows = ((HEIGHT as i32 - (DRAFT_TOP + 2)) / LINE_H) as usize;
-        let style = MonoTextStyle::new(&FONT_6X10, FG);
-
-        // Wrap the whole body into rows (char-wrap + honor '\n'). Keep a bounded
-        // window of rows; the buffer holds the most recent 128 rows which is more
-        // than the 2 KiB response can produce at 26 cols (~80 rows max).
+        let max_rows = CONTENT_ROWS;
+        let style = MonoTextStyle::new(&FONT_6X10, theme.text);
         let mut rows: heapless::Vec<String<COLS>, 256> = heapless::Vec::new();
-        let mut cur: String<COLS> = String::new();
-        for ch in body.chars() {
-            if ch == '\n' || cur.len() >= COLS {
-                if rows.push(cur.clone()).is_err() {
-                    rows.remove(0);
-                    let _ = rows.push(cur.clone());
-                }
-                cur.clear();
-                if ch == '\n' {
-                    continue;
-                }
-            }
-            let _ = cur.push(ch);
-        }
-        if rows.push(cur.clone()).is_err() {
-            rows.remove(0);
-            let _ = rows.push(cur);
-        }
+        wrap_into(body, &mut rows);
 
-        // Clamp the start so the last screenful is the furthest we can scroll.
         let max_start = rows.len().saturating_sub(max_rows);
         let start = scroll_lines.min(max_start);
         let end = (start + max_rows).min(rows.len());
 
         let mut y = DRAFT_TOP + 2;
         for row in &rows[start..end] {
-            Text::with_baseline(row, Point::new(2, y), style, Baseline::Top).draw(target)?;
+            Text::with_baseline(row, Point::new(3, y), style, Baseline::Top).draw(target)?;
             y += LINE_H;
         }
 
-        Self::draw_scrollbar(target, start, max_rows, rows.len())?;
+        Self::draw_scrollbar(target, theme, start, max_rows, rows.len())?;
+        Self::footer_hints(target, theme, "WS scroll  D=type  L=back")?;
         Ok(())
     }
 
-    /// Number of wrapped rows the body produces, and how many fit on one screen.
-    /// The main loop uses this to clamp the scroll offset for
-    /// [`response_scrolled`] without re-wrapping itself. Returns
-    /// `(total_rows, visible_rows)`.
+    fn draw_scrollbar<D>(
+        target: &mut D,
+        theme: &Theme,
+        start_row: usize,
+        visible_rows: usize,
+        total_rows: usize,
+    ) -> Result<(), D::Error>
+    where
+        D: DrawTarget<Color = Rgb565>,
+    {
+        if total_rows <= visible_rows {
+            return Ok(());
+        }
+        let area_h = FOOTER_DIV - (DRAFT_TOP + 2);
+        let bar_h = (area_h * visible_rows as i32 / total_rows as i32).max(4);
+        let bar_y =
+            DRAFT_TOP + 2 + (area_h - bar_h) * start_row as i32 / (total_rows - visible_rows) as i32;
+        // Track (dim) then thumb (accent).
+        Self::fill(target, WIDTH as i32 - 3, DRAFT_TOP + 2, 2, area_h as u32, theme.divider)?;
+        Self::fill(target, WIDTH as i32 - 3, bar_y, 2, bar_h as u32, theme.accent)?;
+        Ok(())
+    }
+
+    /// Number of wrapped rows the body produces, and how many fit on one scroll
+    /// screen. The main loop uses this to clamp the scroll offset. Must match
+    /// [`response_scrolled`]'s row budget.
     pub fn wrapped_row_count(body: &str) -> (usize, usize) {
-        const COLS: usize = (WIDTH as usize) / 6;
-        const LINE_H: i32 = 11;
-        let max_rows = ((HEIGHT as i32 - (DRAFT_TOP + 2)) / LINE_H) as usize;
         let mut rows: usize = 1;
         let mut col: usize = 0;
         for ch in body.chars() {
@@ -537,45 +632,33 @@ impl Ui {
             }
             col += 1;
         }
-        (rows, max_rows)
+        (rows, CONTENT_ROWS)
     }
 
-    /// A vertical settings menu: a title bar plus a list of items, with the
-    /// `selected` row highlighted. Items are pre-formatted by the caller (e.g.
-    /// "Model: deepseek/deepseek-chat") and truncated to the panel width.
-    ///
-    /// The list is taller than the screen (model/persona/tokens + quick prompts
-    /// + games + back), so it scrolls: only a window of rows is drawn, kept
-    /// around the cursor so the highlighted row is always visible, and `^`/`v`
-    /// hints mark when there's more above or below. Used by the Settings mode.
-    ///
-    /// `sliders` is a slice of (row_index, current_value_0_10) for specialized
-    /// rendering of numerical settings as progress bars.
+    // -- settings menu ----------------------------------------------------
+
+    /// A scrolling settings menu. `selected` is highlighted with a surface bar +
+    /// accent left rail. `sliders` rows render a `0..=10` bar; `swatches` rows
+    /// render a small colour square (used by the Theme row).
     pub fn menu<D>(
         target: &mut D,
+        theme: &Theme,
         title: &str,
         items: &[&str],
         selected: usize,
         sliders: &[(usize, u8)],
+        swatches: &[(usize, Rgb565)],
     ) -> Result<(), D::Error>
     where
         D: DrawTarget<Color = Rgb565>,
     {
-        target.clear(BG)?;
-        // Title bar with background fill.
-        Rectangle::new(Point::new(0, 0), Size::new(WIDTH, DRAFT_TOP as u32 - 1))
-            .into_styled(PrimitiveStyle::with_fill(Rgb565::CSS_DARK_SLATE_GRAY))
-            .draw(target)?;
-        Self::text(target, title, 2, STATUS_TOP + 2, FG)?;
-        Self::hline(target, DRAFT_TOP - 1, DIM)?;
+        target.clear(theme.bg)?;
+        Self::header_bar(target, theme, title)?;
 
-        const COLS: usize = (WIDTH as usize) / 6;
-        const LINE_H: i32 = 11;
         let top = DRAFT_TOP + 3;
-        let max_rows = ((HEIGHT as i32 - top) / LINE_H).max(1) as usize;
+        let max_rows = CONTENT_ROWS;
 
-        // Scroll so the selected row stays on screen: center it in the window,
-        // clamped so we never scroll past either end.
+        // Scroll so the selected row stays on screen (centred, clamped).
         let start = if items.len() <= max_rows {
             0
         } else {
@@ -588,66 +671,81 @@ impl Ui {
         let mut y = top;
         for i in start..end {
             let is_sel = i == selected;
-            let color = if is_sel { ACCENT } else { FG };
-
             if is_sel {
-                // Background highlight for the selected row.
-                Rectangle::new(Point::new(0, y - 1), Size::new(WIDTH, LINE_H as u32))
-                    .into_styled(PrimitiveStyle::with_fill(Rgb565::CSS_GRAY))
-                    .draw(target)?;
+                // Surface highlight bar + accent left rail.
+                Self::fill(target, 0, y - 1, WIDTH, LINE_H as u32, theme.surface)?;
+                Self::fill(target, 0, y - 1, 2, LINE_H as u32, theme.accent)?;
             }
+            let row_color = if is_sel { theme.on_surface } else { theme.text };
 
-            // Build a "> item" / "  item" row.
+            // Label, truncated to leave room for the slider / swatch / scrollbar.
             let mut row: String<COLS> = String::new();
-            let _ = row.push_str(if is_sel { ">" } else { " " });
             for ch in items[i].chars() {
-                if row.len() >= COLS - 1 {
+                if row.len() >= COLS - 2 {
                     break;
                 }
                 let _ = row.push(ch);
             }
-            Self::text(target, &row, 2, y, if is_sel { BG } else { color })?;
+            Self::text(target, &row, 4, y, row_color)?;
 
-            // If this row is a slider, draw a bar on the right.
+            // Slider bar on the right, if this row is one. On the selected row the
+            // track is drawn in `bg` (not `divider`) so it stays visible against
+            // the `surface` highlight even in themes where divider≈surface.
             if let Some(&(_, val)) = sliders.iter().find(|(idx, _)| *idx == i) {
                 let bar_w = 40u32;
-                let bar_x = WIDTH as i32 - bar_w as i32 - 10;
-                let fill_w = (bar_w * val as u32) / 10;
-                
-                // Track.
-                Rectangle::new(Point::new(bar_x, y + 3), Size::new(bar_w, 4))
-                    .into_styled(PrimitiveStyle::with_stroke(if is_sel { BG } else { DIM }, 1))
-                    .draw(target)?;
-                // Handle.
-                if val > 0 {
-                    Rectangle::new(Point::new(bar_x, y + 3), Size::new(fill_w, 4))
-                        .into_styled(PrimitiveStyle::with_fill(if is_sel { BG } else { ACCENT }))
-                        .draw(target)?;
+                let bar_x = WIDTH as i32 - bar_w as i32 - 8;
+                let fill_w = (bar_w * val.min(10) as u32) / 10;
+                let track = if is_sel { theme.bg } else { theme.divider };
+                Self::fill(target, bar_x, y + 3, bar_w, 4, track)?;
+                if fill_w > 0 {
+                    Self::fill(target, bar_x, y + 3, fill_w, 4, theme.accent)?;
                 }
+            }
+
+            // Colour swatch on the right, if this row has one (Theme row).
+            if let Some(&(_, color)) = swatches.iter().find(|(idx, _)| *idx == i) {
+                let sw = 9i32;
+                let sx = WIDTH as i32 - sw - 8;
+                Rectangle::new(Point::new(sx, y), Size::new(sw as u32, sw as u32))
+                    .into_styled(PrimitiveStyle::with_stroke(theme.dim, 1))
+                    .draw(target)?;
+                Self::fill(target, sx + 1, y + 1, (sw - 2) as u32, (sw - 2) as u32, color)?;
             }
 
             y += LINE_H;
         }
 
-        // "more above / below" markers in the right margin.
-        let hint_x = WIDTH as i32 - 8;
+        // "more above / below" markers, then the footer hint bar.
         if start > 0 {
-            Self::text(target, "^", hint_x, top, DIM)?;
+            Self::text(target, "^", WIDTH as i32 - 8, top, theme.dim)?;
         }
         if end < items.len() {
-            Self::text(target, "v", hint_x, top + (max_rows as i32 - 1) * LINE_H, DIM)?;
+            Self::text(target, "v", WIDTH as i32 - 8, FOOTER_DIV - LINE_H, theme.dim)?;
         }
+        Self::footer_hints(target, theme, "WS move  A/D change  L ok")?;
         Ok(())
     }
+}
 
-    /// Action layer (after Hold L): label each button's action.
-    fn draw_action_layer<D>(target: &mut D) -> Result<(), D::Error>
-    where
-        D: DrawTarget<Color = Rgb565>,
-    {
-        Self::text(target, "W=back A=send S=expand", 2, GUIDE_TOP, WARN)?;
-        Self::text(target, "D=caps I=set J=newline", 2, GUIDE_TOP + 11, WARN)?;
-        Self::text(target, "K=clear  L=cancel", 2, GUIDE_TOP + 22, WARN)?;
-        Ok(())
+/// Char-wrap `body` into `rows` (honouring `\n`), keeping the most recent rows
+/// when the buffer fills. Shared by the reply views.
+fn wrap_into<const N: usize>(body: &str, rows: &mut heapless::Vec<String<COLS>, N>) {
+    let mut cur: String<COLS> = String::new();
+    for ch in body.chars() {
+        if ch == '\n' || cur.len() >= COLS {
+            if rows.push(cur.clone()).is_err() {
+                rows.remove(0);
+                let _ = rows.push(cur.clone());
+            }
+            cur.clear();
+            if ch == '\n' {
+                continue;
+            }
+        }
+        let _ = cur.push(ch);
+    }
+    if rows.push(cur.clone()).is_err() {
+        rows.remove(0);
+        let _ = rows.push(cur);
     }
 }
