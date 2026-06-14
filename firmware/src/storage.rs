@@ -38,6 +38,9 @@
 //!                   1  model index (u8)
 //!                   1  persona index (u8)
 //!                   1  max_tokens index (u8)
+//!                   1  brightness (u8, 0-10)        — v2+
+//!                   1  volume (u8, 0-10)            — v2+
+//!                   1  theme index (u8)             — v3+
 //!                   1  turn count (u8)
 //!                   then per turn:
 //!                     1  role (u8, see role_to_u8)
@@ -83,7 +86,7 @@ pub type Flash<'d> = embassy_rp::flash::Flash<'d, FLASH, Blocking, FLASH_CHIP_SI
 // ---------------------------------------------------------------------------
 
 const MAGIC: [u8; 4] = *b"SPRG";
-const STORAGE_VERSION: u8 = 2;
+const STORAGE_VERSION: u8 = 3;
 
 /// Fixed header bytes preceding the payload: magic(4) + version(1) +
 /// payload_len(2) + crc32(4).
@@ -136,6 +139,7 @@ pub struct Persisted {
     pub max_tokens: u8,
     pub brightness: u8, // 0-10
     pub volume: u8,     // 0-10
+    pub theme: u8,      // theme index
     pub turns: HVec<(u8, HString<TURN_CAP>), MAX_TURNS>,
 }
 
@@ -179,8 +183,8 @@ pub fn load(flash: &mut Flash<'_>) -> Option<Persisted> {
         return None;
     }
     let version = buf[4];
-    if version != STORAGE_VERSION && version != 1 {
-        defmt::info!("storage: version {} != {}, ignoring", version, STORAGE_VERSION);
+    if version < 1 || version > STORAGE_VERSION {
+        defmt::info!("storage: version {} not in 1..={}, ignoring", version, STORAGE_VERSION);
         return None;
     }
     let payload_len = u16::from_le_bytes([buf[5], buf[6]]) as usize;
@@ -201,11 +205,16 @@ pub fn load(flash: &mut Flash<'_>) -> Option<Persisted> {
     let model = payload[0];
     let persona = payload[1];
     let max_tokens = payload[2];
-    let (brightness, volume, turn_count, mut cur) = if version >= 2 && payload_len >= 6 {
-        (payload[3], payload[4], payload[5] as usize, 6usize)
+    // Fixed-field header grew over versions; migrate older saves with defaults
+    // (brightness 10 / volume 5 / theme 0) so an old sector still loads cleanly.
+    let (brightness, volume, theme, turn_count, mut cur) = if version >= 3 && payload_len >= 7 {
+        (payload[3], payload[4], payload[5], payload[6] as usize, 7usize)
+    } else if version >= 2 && payload_len >= 6 {
+        // v2: brightness, volume, count — no theme byte.
+        (payload[3], payload[4], 0u8, payload[5] as usize, 6usize)
     } else {
-        // Fallback for version 1: fixed 4-byte header (model, persona, tokens, count)
-        (10u8, 5u8, payload[3] as usize, 4usize)
+        // v1: model, persona, tokens, count.
+        (10u8, 5u8, 0u8, payload[3] as usize, 4usize)
     };
 
     let mut turns: HVec<(u8, HString<TURN_CAP>), MAX_TURNS> = HVec::new();
@@ -246,6 +255,7 @@ pub fn load(flash: &mut Flash<'_>) -> Option<Persisted> {
         max_tokens,
         brightness,
         volume,
+        theme,
         turns,
     })
 }
@@ -269,8 +279,9 @@ pub fn save(flash: &mut Flash<'_>, data: &Persisted) {
     buf[cur + 2] = data.max_tokens;
     buf[cur + 3] = data.brightness;
     buf[cur + 4] = data.volume;
-    let count_idx = cur + 5; // filled in after we know how many turns fit
-    cur += 6;
+    buf[cur + 5] = data.theme;
+    let count_idx = cur + 6; // filled in after we know how many turns fit
+    cur += 7;
 
     let mut written_turns: u8 = 0;
     for (role, text) in &data.turns {
