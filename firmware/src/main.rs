@@ -105,6 +105,8 @@ struct Settings {
     max_tokens: usize,
     brightness: u8, // 0-10
     volume: u8,     // 0-10
+    /// Index into `display::THEMES` — the active colour theme.
+    theme: usize,
     /// Highlighted menu row (for navigation).
     cursor: usize,
     /// Transient per-session system-prompt override set by starting a game from
@@ -120,9 +122,15 @@ impl Settings {
             max_tokens: 2, // default 1024
             brightness: 10,
             volume: 5,
+            theme: 0, // Phosphor
             cursor: 0,
             system_override: None,
         }
+    }
+
+    /// The active colour theme (always a valid index — clamped on load).
+    fn theme(&self) -> &'static display::Theme {
+        &display::THEMES[self.theme]
     }
 
     fn model(&self) -> &'static str {
@@ -175,12 +183,13 @@ const GAMES: &[(&str, &str, &str)] = &[
 
 const ROW_MODEL: usize = 0;
 const ROW_PERSONA: usize = 1;
-const ROW_TOKENS: usize = 2;
-const ROW_BRIGHTNESS: usize = 3;
-const ROW_VOLUME: usize = 4;
-const ROW_NEWCONV: usize = 5;
+const ROW_THEME: usize = 2;
+const ROW_TOKENS: usize = 3;
+const ROW_BRIGHTNESS: usize = 4;
+const ROW_VOLUME: usize = 5;
+const ROW_NEWCONV: usize = 6;
 /// Quick-prompt rows occupy `[QUICK_BASE, QUICK_BASE + QUICK_PROMPTS.len())`.
-const QUICK_BASE: usize = 6;
+const QUICK_BASE: usize = 7;
 /// Game rows occupy `[GAMES_BASE, GAMES_BASE + GAMES.len())`, after the quick
 /// prompts and before Back.
 const GAMES_BASE: usize = QUICK_BASE + QUICK_PROMPTS.len();
@@ -265,7 +274,8 @@ async fn main(spawner: Spawner) {
         defmt::error!("ST7735 set_orientation failed");
     }
 
-    if Ui::clear(&mut lcd).is_err() {
+    // The saved theme isn't loaded yet, so the boot screens use the default.
+    if Ui::clear(&mut lcd, &display::PHOSPHOR).is_err() {
         defmt::error!("display clear failed");
     }
 
@@ -287,7 +297,7 @@ async fn main(spawner: Spawner) {
     // PIO-SPI DIO=24, CLK=29), which does NOT conflict with the Sprig's display
     // or button pins. `net::init` joins WiFi and waits for DHCP, so show a
     // splash first; it blocks here until connected (retrying on failure).
-    let _ = Ui::response(&mut lcd, "Connecting WiFi...", "Joining network and getting DHCP lease.");
+    let _ = Ui::splash(&mut lcd, &display::PHOSPHOR, "SPRIG", "Connecting WiFi...");
     // `init` retries the WiFi join forever, so a returned `Err` is not expected;
     // treat it as fatal (the splash already told the user we're connecting).
     let mut net: Net = net::init(
@@ -346,6 +356,9 @@ async fn main(spawner: Spawner) {
         }
         settings.brightness = saved.brightness.clamp(1, 10);
         settings.volume = saved.volume.min(10);
+        if (saved.theme as usize) < display::THEMES.len() {
+            settings.theme = saved.theme as usize;
+        }
         for (role_u8, text) in saved.turns {
             // `push_turn` truncates to TURN_CAP and drops oldest when full.
             push_turn(&mut history, storage::role_from_u8(role_u8), &text);
@@ -364,11 +377,13 @@ async fn main(spawner: Spawner) {
     let mut mode = Mode::Composing;
     // Holds the most recent finished reply, for scrolling in ShowingResponse.
     let mut last_reply: HString<RESPONSE_CAP> = HString::new();
+    // The reply view's header (token readout), reused across scroll repaints.
+    let mut reply_header: HString<32> = HString::new();
     // Running total of tokens billed across replies this power-on session.
     let mut session_tokens: u32 = 0;
 
     // Initial paint.
-    let _ = Ui::render(&mut lcd, &kb, PERSONAS[settings.persona].0, &status);
+    let _ = Ui::render(&mut lcd, settings.theme(), &kb, PERSONAS[settings.persona].0, &status);
 
     // --- Main loop: scan → dispatch by mode → redraw on change. ---
     let tick = Duration::from_millis(input::TICK_MS);
@@ -415,16 +430,23 @@ async fn main(spawner: Spawner) {
                 }
                 if dismiss {
                     mode = Mode::Composing;
-                    let _ = Ui::render(&mut lcd, &kb, PERSONAS[settings.persona].0, &status);
+                    let _ = Ui::render(&mut lcd, settings.theme(), &kb, PERSONAS[settings.persona].0, &status);
                 } else {
                     if type_pc {
-                        let _ = Ui::response_scrolled(&mut lcd, "Typing to PC...", &last_reply, scroll);
+                        let _ = Ui::response_scrolled(
+                            &mut lcd,
+                            settings.theme(),
+                            "TYPING TO PC",
+                            &last_reply,
+                            scroll,
+                        );
                         usb_kb.type_text(&last_reply).await;
                     }
                     if moved || type_pc {
                         let _ = Ui::response_scrolled(
                             &mut lcd,
-                            "scroll  D=type  L=back",
+                            settings.theme(),
+                            &reply_header,
                             &last_reply,
                             scroll,
                         );
@@ -465,6 +487,11 @@ async fn main(spawner: Spawner) {
                                     ROW_PERSONA => {
                                         settings.persona = (settings.persona + 1) % PERSONAS.len();
                                         settings.system_override = None;
+                                        save_now = true;
+                                    }
+                                    ROW_THEME => {
+                                        settings.theme =
+                                            (settings.theme + 1) % display::THEMES.len();
                                         save_now = true;
                                     }
                                     ROW_TOKENS => {
@@ -514,8 +541,15 @@ async fn main(spawner: Spawner) {
                                 redraw = true;
                             }
                             Button::A | Button::J => {
-                                // Decrease value (for sliders).
+                                // Decrease value (for sliders + theme cycle back).
                                 match settings.cursor {
+                                    ROW_THEME => {
+                                        settings.theme = (settings.theme
+                                            + display::THEMES.len()
+                                            - 1)
+                                            % display::THEMES.len();
+                                        save_now = true;
+                                    }
                                     ROW_BRIGHTNESS => {
                                         if settings.brightness > 1 {
                                             settings.brightness -= 1;
@@ -550,7 +584,7 @@ async fn main(spawner: Spawner) {
                 }
                 if exit {
                     mode = Mode::Composing;
-                    let _ = Ui::render(&mut lcd, &kb, PERSONAS[settings.persona].0, &status);
+                    let _ = Ui::render(&mut lcd, settings.theme(), &kb, PERSONAS[settings.persona].0, &status);
                 } else if redraw {
                     draw_menu(&mut lcd, &settings, &history);
                 }
@@ -587,7 +621,7 @@ async fn main(spawner: Spawner) {
                             .await;
                             last_reply.clear();
                             match reply {
-                                Ok(r) => {
+                                Ok((r, reply_tokens)) => {
                                     push_turn(&mut history, Role::Assistant, &r);
                                     let _ = last_reply.push_str(&r);
                                     audio.play_chime().await;
@@ -597,6 +631,22 @@ async fn main(spawner: Spawner) {
                                     // Turn fully complete and the network is idle
                                     // — a safe point to persist the conversation.
                                     persist(&mut flash, &settings, &history);
+                                    // Paint the scrollable reply view straight away
+                                    // so the token readout, scrollbar, and footer
+                                    // hints (D=type / scroll / back) show at once.
+                                    reply_header.clear();
+                                    let _ = write!(reply_header, "{}t  sum {}t", reply_tokens, session_tokens);
+                                    if reply_header.len() > 24 {
+                                        reply_header.clear();
+                                        let _ = write!(reply_header, "{}t / {}t", reply_tokens, session_tokens);
+                                    }
+                                    let _ = Ui::response_scrolled(
+                                        &mut lcd,
+                                        settings.theme(),
+                                        &reply_header,
+                                        &last_reply,
+                                        0,
+                                    );
                                 }
                                 Err(_) => {
                                     // Failed: drop the user turn so the chat isn't
@@ -623,7 +673,7 @@ async fn main(spawner: Spawner) {
                                     audio.play_chime().await;
                                     kb.set_text(&r);
                                     // Repaint the keyboard with the rewritten draft.
-                                    let _ = Ui::render(&mut lcd, &kb, PERSONAS[settings.persona].0, &status);
+                                    let _ = Ui::render(&mut lcd, settings.theme(), &kb, PERSONAS[settings.persona].0, &status);
                                 }
                                 Err(_) => {
                                     // Error already shown on screen; keep it up
@@ -638,7 +688,7 @@ async fn main(spawner: Spawner) {
                 }
                 if dirty {
                     audio.play_click().await; // one soft click per visible change
-                    let _ = Ui::render(&mut lcd, &kb, PERSONAS[settings.persona].0, &status);
+                    let _ = Ui::render(&mut lcd, settings.theme(), &kb, PERSONAS[settings.persona].0, &status);
                 }
             }
         }
@@ -656,21 +706,20 @@ where
     let _ = write!(model_row, "Model: {}", settings.model());
     let mut persona_row: HString<32> = HString::new();
     let _ = write!(persona_row, "Persona: {}", PERSONAS[settings.persona].0);
+    let mut theme_row: HString<32> = HString::new();
+    let _ = write!(theme_row, "Theme: {}", settings.theme().name);
     let mut tokens_row: HString<24> = HString::new();
     let _ = write!(tokens_row, "Max tokens: {}", settings.max_tokens());
-    let mut bright_row: HString<24> = HString::new();
-    let _ = write!(bright_row, "Brightness");
-    let mut volume_row: HString<24> = HString::new();
-    let _ = write!(volume_row, "Volume");
     let mut newconv_row: HString<32> = HString::new();
     let _ = write!(newconv_row, "New conversation ({})", history.len());
 
     let mut items: HVec<&str, MENU_ROWS> = HVec::new();
     let _ = items.push(model_row.as_str());
     let _ = items.push(persona_row.as_str());
+    let _ = items.push(theme_row.as_str());
     let _ = items.push(tokens_row.as_str());
-    let _ = items.push(bright_row.as_str());
-    let _ = items.push(volume_row.as_str());
+    let _ = items.push("Brightness");
+    let _ = items.push("Volume");
     let _ = items.push(newconv_row.as_str());
     for (name, _) in QUICK_PROMPTS {
         let _ = items.push(name);
@@ -684,7 +733,17 @@ where
         (ROW_BRIGHTNESS, settings.brightness),
         (ROW_VOLUME, settings.volume),
     ];
-    let _ = Ui::menu(lcd, "Settings (D=+, A=-)", &items, settings.cursor, &sliders);
+    // A colour swatch on the Theme row, in the selected theme's accent colour.
+    let swatches = [(ROW_THEME, settings.theme().accent)];
+    let _ = Ui::menu(
+        lcd,
+        settings.theme(),
+        "SETTINGS",
+        &items,
+        settings.cursor,
+        &sliders,
+        &swatches,
+    );
 }
 
 /// Snapshot the current settings + history into flash. Call ONLY at quiescent
@@ -703,6 +762,7 @@ fn persist(flash: &mut storage::Flash, settings: &Settings, history: &[Turn]) {
         max_tokens: settings.max_tokens as u8,
         brightness: settings.brightness,
         volume: settings.volume,
+        theme: settings.theme as u8,
         turns,
     };
     storage::save(flash, &data);
@@ -738,7 +798,7 @@ async fn stream_chat_to_screen<D>(
     settings: &Settings,
     history: &[Turn],
     session_tokens: &mut u32,
-) -> Result<HString<RESPONSE_CAP>, ()>
+) -> Result<(HString<RESPONSE_CAP>, u32), ()>
 where
     D: embedded_graphics::draw_target::DrawTarget<Color = embedded_graphics::pixelcolor::Rgb565>,
 {
@@ -748,6 +808,7 @@ where
         let _ = turns.push((*role, text.as_str()));
     }
 
+    let theme = settings.theme();
     net.set_led(true).await;
     let mut acc: HString<RESPONSE_CAP> = HString::new();
 
@@ -762,6 +823,7 @@ where
         let mut painted_len = 0usize;
         let _ = Ui::response(
             lcd,
+            theme,
             if attempt == 1 { "Streaming..." } else { "Retrying..." },
             "",
         );
@@ -786,7 +848,12 @@ where
                     // the complete reply with the token header.
                     if acc.len() >= painted_len + 24 {
                         painted_len = acc.len();
-                        let _ = Ui::response_stream(lcd, "Streaming...", &acc);
+                        // A little spinner in the header signals the stream is
+                        // live; it costs nothing (we're repainting anyway).
+                        let spin = ['|', '/', '-', '\\'][(acc.len() / 24) % 4];
+                        let mut h: HString<16> = HString::new();
+                        let _ = write!(h, "Streaming {}", spin);
+                        let _ = Ui::response_stream(lcd, theme, &h, &acc);
                     }
                 },
             )
@@ -804,26 +871,15 @@ where
 
     match result {
         Ok(reply_tokens) => {
-            // Accumulate this reply's tokens into the running session total and
-            // show both in the header (reply this turn / running sum).
+            // Accumulate this reply's tokens into the running session total. The
+            // caller paints the final reply view (token header + footer hints).
             *session_tokens = session_tokens.saturating_add(reply_tokens);
-            let mut hdr: HString<32> = HString::new();
-            // Prefer the spaced form; fall back to a compact one if it would be
-            // too wide for the header row.
-            let _ = write!(hdr, "{}t  sum {}t  L=back", reply_tokens, *session_tokens);
-            if hdr.len() > 26 {
-                hdr.clear();
-                let _ = write!(hdr, "{}t/{}t  L=back", reply_tokens, *session_tokens);
-            }
-            // In-place repaint (no clear) so the final frame doesn't flash either;
-            // only the header swaps from "Streaming..." to the token line.
-            let _ = Ui::response_stream(lcd, &hdr, &acc);
-            Ok(acc)
+            Ok((acc, reply_tokens))
         }
         Err(e) => {
             let mut hdr: HString<32> = HString::new();
             let _ = write!(hdr, "Error: {:?}", e);
-            let _ = Ui::response(lcd, &hdr, &acc);
+            let _ = Ui::response(lcd, theme, &hdr, &acc);
             Err(())
         }
     }
@@ -841,10 +897,12 @@ async fn stream_expand_to_screen<D>(
 where
     D: embedded_graphics::draw_target::DrawTarget<Color = embedded_graphics::pixelcolor::Rgb565>,
 {
+    let theme = settings.theme();
     let mut acc: HString<RESPONSE_CAP> = HString::new();
-    let _ = Ui::response(lcd, "Rewriting...", "");
+    let _ = Ui::response(lcd, theme, "Rewriting...", "");
     net.set_led(true).await;
 
+    let mut painted_len = 0usize;
     let result = net
         .send_chat(
             settings.model(),
@@ -857,7 +915,11 @@ where
                         break;
                     }
                 }
-                let _ = Ui::response(lcd, "Rewriting...", &acc);
+                // Throttled, in-place repaint (same flicker-free path as chat).
+                if acc.len() >= painted_len + 24 {
+                    painted_len = acc.len();
+                    let _ = Ui::response_stream(lcd, theme, "Rewriting...", &acc);
+                }
             },
         )
         .await;
@@ -870,7 +932,7 @@ where
         Err(e) => {
             let mut hdr: HString<32> = HString::new();
             let _ = write!(hdr, "Error: {:?}", e);
-            let _ = Ui::response(lcd, &hdr, &acc);
+            let _ = Ui::response(lcd, theme, &hdr, &acc);
             Err(())
         }
     }
