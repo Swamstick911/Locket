@@ -15,8 +15,11 @@ and remembers your chats across power-offs.
 - **Multi-turn chat** — keeps conversation context across messages.
 - **Any model via OpenRouter** — switch models on-device (e.g. `openai/gpt-5`,
   `deepseek/deepseek-chat`).
-- **Settings menu** — model, persona (Concise / Coder / Translate), max-tokens,
-  quick prompts, AI game modes, and "new conversation".
+- **Themes** — three selectable colour themes (Phosphor terminal, Modern Dark,
+  Game Boy); the whole UI restyles instantly and the choice is saved.
+- **Settings menu** — model, persona (Concise / Coder / Translate), theme,
+  max-tokens, screen brightness, volume, quick prompts, AI game modes, and
+  "new conversation".
 - **AI game modes** — text adventure, 20 Questions, and trivia, with the LLM as
   game master.
 - **Response scrolling** and a live **token-usage readout** (per reply + session).
