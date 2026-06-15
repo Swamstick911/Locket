@@ -297,7 +297,13 @@ async fn main(spawner: Spawner) {
     // PIO-SPI DIO=24, CLK=29), which does NOT conflict with the Sprig's display
     // or button pins. `net::init` joins WiFi and waits for DHCP, so show a
     // splash first; it blocks here until connected (retrying on failure).
-    let _ = Ui::splash(&mut lcd, &display::PHOSPHOR, "SPRIG", "Connecting WiFi...");
+    let _ = Ui::splash(
+        &mut lcd,
+        &display::PHOSPHOR,
+        "Locket",
+        concat!("v", env!("CARGO_PKG_VERSION"), " - pocket AI"),
+        "Connecting WiFi...",
+    );
     // `init` retries the WiFi join forever, so a returned `Err` is not expected;
     // treat it as fatal (the splash already told the user we're connecting).
     let mut net: Net = net::init(

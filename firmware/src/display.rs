@@ -228,19 +228,28 @@ impl Ui {
         Ok(())
     }
 
-    /// A boot/connection splash: a big centred title plus a dim subtitle. Uses
-    /// the larger `FONT_10X20` (its own screen, so no tight-layout risk).
-    pub fn splash<D>(target: &mut D, theme: &Theme, title: &str, subtitle: &str) -> Result<(), D::Error>
+    /// A boot/connection splash: a big centred title (the product name), a
+    /// `version` subheading, and a dim `status` line. Uses the larger
+    /// `FONT_10X20` for the title (its own screen, so no tight-layout risk).
+    pub fn splash<D>(
+        target: &mut D,
+        theme: &Theme,
+        title: &str,
+        version: &str,
+        status: &str,
+    ) -> Result<(), D::Error>
     where
         D: DrawTarget<Color = Rgb565>,
     {
         target.clear(theme.bg)?;
         let big = MonoTextStyle::new(&FONT_10X20, theme.accent);
         let tw = title.len() as i32 * 10;
-        Text::with_baseline(title, Point::new((WIDTH as i32 - tw) / 2, 38), big, Baseline::Top)
+        Text::with_baseline(title, Point::new((WIDTH as i32 - tw) / 2, 28), big, Baseline::Top)
             .draw(target)?;
-        let sw = subtitle.len() as i32 * 6;
-        Self::text(target, subtitle, (WIDTH as i32 - sw) / 2, 72, theme.dim)?;
+        let vw = version.len() as i32 * 6;
+        Self::text(target, version, (WIDTH as i32 - vw) / 2, 56, theme.text)?;
+        let sw = status.len() as i32 * 6;
+        Self::text(target, status, (WIDTH as i32 - sw) / 2, 80, theme.dim)?;
         Ok(())
     }
 
