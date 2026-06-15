@@ -37,6 +37,7 @@ use embedded_graphics::{
 };
 use heapless::String;
 use sprig_llm_core::keyboard::Keyboard;
+use sprig_llm_core::predict::Candidates;
 
 /// Physical panel size.
 pub const WIDTH: u32 = 160;
@@ -389,29 +390,60 @@ impl Ui {
             return Self::draw_action_layer(target, theme);
         }
         match kb.active_group() {
-            Some(letters) => Self::draw_letter_cross(target, theme, letters),
+            Some(letters) => Self::draw_letter_cross(target, theme, letters, kb.candidates()),
             None => Self::draw_compose_guide(target, theme, kb),
         }
     }
 
-    /// Step 2: the chosen group's letters arranged like the physical left D-pad.
-    fn draw_letter_cross<D>(target: &mut D, theme: &Theme, letters: &str) -> Result<(), D::Error>
+    /// Step 2: a left-pad letter cross (pick the letter) and, when predictions
+    /// exist, a right-hand column of whole words mapped to the right pad
+    /// (`I`/`J`/`K` → candidate 1/2/3). So the left pad finishes the letter and
+    /// the right pad grabs a whole word — two separate sides.
+    fn draw_letter_cross<D>(
+        target: &mut D,
+        theme: &Theme,
+        letters: &str,
+        cands: &Candidates,
+    ) -> Result<(), D::Error>
     where
         D: DrawTarget<Color = Rgb565>,
     {
-        let cells = [("W", 0usize), ("A", 1), ("S", 2), ("D", 3)];
-        let pos = [
-            (68, GUIDE_TOP),       // W (up)
-            (4, GUIDE_TOP + 11),   // A (left)
-            (68, GUIDE_TOP + 22),  // S (down)
-            (120, GUIDE_TOP + 11), // D (right)
+        // Left zone: the letter cross, compressed to the left half to leave room
+        // for the word column.
+        let cells = [
+            ("W", 0usize, (42, GUIDE_TOP)),       // up
+            ("A", 1, (2, GUIDE_TOP + 11)),        // left
+            ("S", 2, (42, GUIDE_TOP + 22)),       // down
+            ("D", 3, (74, GUIDE_TOP + 11)),       // right
         ];
-        for (i, (btn, idx)) in cells.iter().enumerate() {
+        for (btn, idx, (x, y)) in cells.iter() {
             if let Some(ch) = letters.chars().nth(*idx) {
                 let mut cell: String<8> = String::new();
                 let _ = write!(cell, "{}:{}", btn, ch);
-                let (x, y) = pos[i];
-                Self::text_bold(target, &cell, x, y, theme.accent)?;
+                Self::text_bold(target, &cell, *x, *y, theme.accent)?;
+            }
+        }
+
+        // Right zone: up to three predicted words, each grabbable with its
+        // right-pad key. Only drawn when predictions exist.
+        if !cands.is_empty() {
+            // Divider between the letter cross and the word column.
+            Self::fill(target, 90, GUIDE_TOP, 1, (HEIGHT as i32 - GUIDE_TOP) as u32, theme.divider)?;
+            let keys = ["I", "J", "K"];
+            for (i, key) in keys.iter().enumerate() {
+                if let Some(word) = cands.get(i) {
+                    let y = GUIDE_TOP + i as i32 * 11;
+                    // Key letter (accent) then the word (text), truncated to fit.
+                    Self::text(target, key, 94, y, theme.accent)?;
+                    let mut w: String<12> = String::new();
+                    for ch in word.as_str().chars() {
+                        if w.len() >= 9 {
+                            break;
+                        }
+                        let _ = w.push(ch);
+                    }
+                    Self::text(target, &w, 104, y, theme.text)?;
+                }
             }
         }
         Ok(())
