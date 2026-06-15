@@ -13,6 +13,9 @@ It's all software. A stock Sprig plays games off an SD card; Locket throws that
 out and runs its own firmware (written in Rust). Nothing is soldered on and no
 parts are added — it's the same board you'd buy, just reprogrammed.
 
+Here is a demo of it working! 
+https://github.com/user-attachments/assets/2c7b3b82-ad65-4eb5-9531-32f6edc49ca4
+
 ## What it can do
 
 You hold a conversation with an AI and it remembers the thread, not just the
