@@ -41,6 +41,7 @@
 //!                   1  brightness (u8, 0-10)        — v2+
 //!                   1  volume (u8, 0-10)            — v2+
 //!                   1  theme index (u8)             — v3+
+//!                   1  provider index (u8)          — v4+
 //!                   1  turn count (u8)
 //!                   then per turn:
 //!                     1  role (u8, see role_to_u8)
@@ -86,7 +87,7 @@ pub type Flash<'d> = embassy_rp::flash::Flash<'d, FLASH, Blocking, FLASH_CHIP_SI
 // ---------------------------------------------------------------------------
 
 const MAGIC: [u8; 4] = *b"SPRG";
-const STORAGE_VERSION: u8 = 3;
+const STORAGE_VERSION: u8 = 4;
 
 /// Fixed header bytes preceding the payload: magic(4) + version(1) +
 /// payload_len(2) + crc32(4).
@@ -140,6 +141,7 @@ pub struct Persisted {
     pub brightness: u8, // 0-10
     pub volume: u8,     // 0-10
     pub theme: u8,      // theme index
+    pub provider: u8,   // API provider index
     pub turns: HVec<(u8, HString<TURN_CAP>), MAX_TURNS>,
 }
 
@@ -207,15 +209,19 @@ pub fn load(flash: &mut Flash<'_>) -> Option<Persisted> {
     let max_tokens = payload[2];
     // Fixed-field header grew over versions; migrate older saves with defaults
     // (brightness 10 / volume 5 / theme 0) so an old sector still loads cleanly.
-    let (brightness, volume, theme, turn_count, mut cur) = if version >= 3 && payload_len >= 7 {
-        (payload[3], payload[4], payload[5], payload[6] as usize, 7usize)
-    } else if version >= 2 && payload_len >= 6 {
-        // v2: brightness, volume, count — no theme byte.
-        (payload[3], payload[4], 0u8, payload[5] as usize, 6usize)
-    } else {
-        // v1: model, persona, tokens, count.
-        (10u8, 5u8, 0u8, payload[3] as usize, 4usize)
-    };
+    let (brightness, volume, theme, provider, turn_count, mut cur) =
+        if version >= 4 && payload_len >= 8 {
+            (payload[3], payload[4], payload[5], payload[6], payload[7] as usize, 8usize)
+        } else if version >= 3 && payload_len >= 7 {
+            // v3: ... theme, count — no provider byte.
+            (payload[3], payload[4], payload[5], 0u8, payload[6] as usize, 7usize)
+        } else if version >= 2 && payload_len >= 6 {
+            // v2: brightness, volume, count — no theme/provider.
+            (payload[3], payload[4], 0u8, 0u8, payload[5] as usize, 6usize)
+        } else {
+            // v1: model, persona, tokens, count.
+            (10u8, 5u8, 0u8, 0u8, payload[3] as usize, 4usize)
+        };
 
     let mut turns: HVec<(u8, HString<TURN_CAP>), MAX_TURNS> = HVec::new();
     for _ in 0..turn_count {
@@ -256,6 +262,7 @@ pub fn load(flash: &mut Flash<'_>) -> Option<Persisted> {
         brightness,
         volume,
         theme,
+        provider,
         turns,
     })
 }
@@ -280,8 +287,9 @@ pub fn save(flash: &mut Flash<'_>, data: &Persisted) {
     buf[cur + 3] = data.brightness;
     buf[cur + 4] = data.volume;
     buf[cur + 5] = data.theme;
-    let count_idx = cur + 6; // filled in after we know how many turns fit
-    cur += 7;
+    buf[cur + 6] = data.provider;
+    let count_idx = cur + 7; // filled in after we know how many turns fit
+    cur += 8;
 
     let mut written_turns: u8 = 0;
     for (role, text) in &data.turns {
