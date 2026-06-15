@@ -70,8 +70,8 @@ cargo install elf2uf2-rs
 **2. Grab the code:**
 
 ```sh
-git clone https://github.com/Swamstick911/Sprig-terminal-LLM.git
-cd Sprig-terminal-LLM
+git clone https://github.com/Swamstick911/Locket.git
+cd Locket
 ```
 
 **3. Add your details.** Copy the example config (the real one is gitignored, so
