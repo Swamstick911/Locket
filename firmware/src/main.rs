@@ -274,8 +274,44 @@ async fn main(spawner: Spawner) {
         defmt::error!("ST7735 set_orientation failed");
     }
 
-    // The saved theme isn't loaded yet, so the boot screens use the default.
-    if Ui::clear(&mut lcd, &display::PHOSPHOR).is_err() {
+    // --- Persistent storage + settings, loaded BEFORE the first paint so the
+    // boot splash and every screen use the saved theme. Flash reads are plain
+    // XIP (safe any time); erase/write only happen later at quiescent points.
+    // `p.FLASH` is otherwise unused. ---
+    let mut flash = storage::Flash::new_blocking(p.FLASH);
+    let mut settings = Settings::new();
+    let mut history: HVec<Turn, MAX_TURNS> = HVec::new();
+    if let Some(saved) = storage::load(&mut flash) {
+        if (saved.model as usize) < MODELS.len() {
+            settings.model = saved.model as usize;
+        }
+        if (saved.persona as usize) < PERSONAS.len() {
+            settings.persona = saved.persona as usize;
+        }
+        if (saved.max_tokens as usize) < MAX_TOKENS.len() {
+            settings.max_tokens = saved.max_tokens as usize;
+        }
+        settings.brightness = saved.brightness.clamp(1, 10);
+        settings.volume = saved.volume.min(10);
+        if (saved.theme as usize) < display::THEMES.len() {
+            settings.theme = saved.theme as usize;
+        }
+        for (role_u8, text) in saved.turns {
+            // `push_turn` truncates to TURN_CAP and drops oldest when full.
+            push_turn(&mut history, storage::role_from_u8(role_u8), &text);
+        }
+        info!("storage: restored {} turn(s)", history.len());
+    }
+
+    // Apply the saved brightness now (volume is applied once audio is up, below).
+    let mut pwm_cfg = PwmConfig::default();
+    pwm_cfg.enable = true;
+    pwm_cfg.top = 1000;
+    pwm_cfg.compare_b = (settings.brightness as u16) * 100;
+    backlight.set_config(&pwm_cfg);
+
+    // First paint, in the saved theme.
+    if Ui::clear(&mut lcd, settings.theme()).is_err() {
         defmt::error!("display clear failed");
     }
 
@@ -299,7 +335,7 @@ async fn main(spawner: Spawner) {
     // splash first; it blocks here until connected (retrying on failure).
     let _ = Ui::splash(
         &mut lcd,
-        &display::PHOSPHOR,
+        settings.theme(),
         "Locket",
         concat!("v", env!("CARGO_PKG_VERSION"), " - pocket AI"),
         "Connecting WiFi...",
@@ -329,6 +365,7 @@ async fn main(spawner: Spawner) {
         p.PIN_11,
         p.DMA_CH1,
     );
+    audio.set_volume(settings.volume);
 
     // --- USB HID keyboard on the native USB: lets the device type a reply into
     // a connected PC. WiFi uses the separate CYW43 radio, so the two coexist. ---
@@ -338,47 +375,6 @@ async fn main(spawner: Spawner) {
     let predictor = StaticPredictor::new(dict_data::WORDS);
     let mut kb = Keyboard::new();
     let mut status: display::Status = display::Status::new();
-
-    // --- Persistent storage (top flash sector). Blocking-mode driver, no DMA
-    // needed; reads are plain XIP, erase/write run from RAM in a critical
-    // section (see storage.rs). `p.FLASH` is otherwise unused. ---
-    let mut flash = storage::Flash::new_blocking(p.FLASH);
-
-    // --- App state: settings + bounded conversation history + UI mode. ---
-    let mut settings = Settings::new();
-    let mut history: HVec<Turn, MAX_TURNS> = HVec::new();
-
-    // Restore saved settings + conversation, if any. Indices are clamped to the
-    // current option arrays so an old/oversized index can never panic.
-    if let Some(saved) = storage::load(&mut flash) {
-        if (saved.model as usize) < MODELS.len() {
-            settings.model = saved.model as usize;
-        }
-        if (saved.persona as usize) < PERSONAS.len() {
-            settings.persona = saved.persona as usize;
-        }
-        if (saved.max_tokens as usize) < MAX_TOKENS.len() {
-            settings.max_tokens = saved.max_tokens as usize;
-        }
-        settings.brightness = saved.brightness.clamp(1, 10);
-        settings.volume = saved.volume.min(10);
-        if (saved.theme as usize) < display::THEMES.len() {
-            settings.theme = saved.theme as usize;
-        }
-        for (role_u8, text) in saved.turns {
-            // `push_turn` truncates to TURN_CAP and drops oldest when full.
-            push_turn(&mut history, storage::role_from_u8(role_u8), &text);
-        }
-        info!("storage: restored {} turn(s)", history.len());
-    }
-
-    // Apply initial brightness and volume.
-    let mut pwm_cfg = PwmConfig::default();
-    pwm_cfg.enable = true;
-    pwm_cfg.top = 1000;
-    pwm_cfg.compare_b = (settings.brightness as u16) * 100;
-    backlight.set_config(&pwm_cfg);
-    audio.set_volume(settings.volume);
 
     let mut mode = Mode::Composing;
     // Holds the most recent finished reply, for scrolling in ShowingResponse.
