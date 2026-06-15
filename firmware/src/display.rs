@@ -417,41 +417,44 @@ impl Ui {
         Ok(())
     }
 
-    /// Step 1: prediction chips (top candidates) plus the group→button map.
+    /// Step 1: the word `L` will complete to (with an `L` key badge), any other
+    /// candidates shown dimmed as "keep typing toward these", and the
+    /// group→button map. Only the badged word is selectable — by pressing `L`;
+    /// the alternatives re-rank as you type more letters.
     fn draw_compose_guide<D>(target: &mut D, theme: &Theme, kb: &Keyboard) -> Result<(), D::Error>
     where
         D: DrawTarget<Color = Rgb565>,
     {
-        // Line 1: up to three prediction chips. The first is the one space (L)
-        // accepts; it's filled with the accent colour. If there are none, fall
-        // back to a plain hint.
-        let candidates = kb.candidates();
-        if candidates.is_empty() {
-            Self::text(target, "L = space", 3, GUIDE_TOP, theme.dim)?;
-        } else {
-            let mut x = 2i32;
-            for (i, word) in candidates.iter().take(3).enumerate() {
-                let w = word.len() as i32 * 6 + 6; // text + horizontal padding
-                if x + w > WIDTH as i32 - 2 {
+        // Line 1: only show the suggestion strip when `L` would actually accept a
+        // word (i.e. the current word is incomplete). Otherwise `L` is a space.
+        if let Some(word) = kb.space_completion() {
+            // An "L" key badge, then the exact word L accepts (in accent).
+            Self::fill(target, 2, GUIDE_TOP - 1, 11, 11, theme.accent)?;
+            Self::text(target, "L", 5, GUIDE_TOP, theme.on_accent)?;
+            let mut x = 16i32;
+            Self::text(target, word, x, GUIDE_TOP, theme.accent)?;
+            x += word.len() as i32 * 6 + 8;
+            // Up to two other candidates, dimmed — reachable by typing more.
+            for cand in kb.candidates().iter().filter(|c| c.as_str() != word).take(2) {
+                let need = cand.len() as i32 * 6;
+                if x + need > WIDTH as i32 - 2 {
                     break;
                 }
-                if i == 0 {
-                    // Focused chip: accent fill, inverse text.
-                    Self::fill(target, x, GUIDE_TOP - 1, w as u32, 11, theme.accent)?;
-                    Self::text(target, word, x + 3, GUIDE_TOP, theme.on_accent)?;
-                } else {
-                    Rectangle::new(Point::new(x, GUIDE_TOP - 1), Size::new(w as u32, 11))
-                        .into_styled(PrimitiveStyle::with_stroke(theme.divider, 1))
-                        .draw(target)?;
-                    Self::text(target, word, x + 3, GUIDE_TOP, theme.text)?;
-                }
-                x += w + 3;
+                Self::text(target, cand, x, GUIDE_TOP, theme.dim)?;
+                x += need + 8;
             }
+        } else {
+            Self::text(target, "L = space", 3, GUIDE_TOP, theme.dim)?;
         }
 
-        // Lines 2-3: the group → button map (which button holds which letters).
+        // Lines 2-3: the group → button map; the L hint reflects what L does now.
         Self::text(target, "Wabcd Aefgh Sijkl Dmnop", 0, GUIDE_TOP + 11, theme.dim)?;
-        Self::text(target, "Iqrst Juvwx Kyz., L=spc", 0, GUIDE_TOP + 22, theme.dim)?;
+        let line3 = if kb.space_completion().is_some() {
+            "Iqrst Juvwx Kyz. L=fill"
+        } else {
+            "Iqrst Juvwx Kyz., L=spc"
+        };
+        Self::text(target, line3, 0, GUIDE_TOP + 22, theme.dim)?;
         Ok(())
     }
 
