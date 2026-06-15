@@ -1,4 +1,6 @@
-//! Networking: CYW43 WiFi bring-up + streaming HTTPS to the LLM (OpenRouter).
+//! Networking: CYW43 WiFi bring-up + streaming HTTPS to an OpenAI-compatible
+//! chat endpoint (OpenRouter by default; the host/path/key are set in `config`,
+//! so Hack Club AI or any compatible gateway works by editing those).
 //!
 //! This module owns everything between the on-device keyboard and the LLM:
 //!
@@ -48,7 +50,7 @@ use reqwless::headers::ContentType;
 use reqwless::request::{Method, RequestBuilder};
 use static_cell::StaticCell;
 
-use sprig_llm_core::provider::{LlmProvider, OpenRouter, Role};
+use sprig_llm_core::provider::{OpenRouter, Role};
 use sprig_llm_core::sse::{process_openai_line, usage_total, SseOut};
 
 use crate::config;
@@ -267,7 +269,9 @@ impl Net {
             .build_chat_body(system, turns, &mut body)
             .map_err(|_| NetError::BodyTooLarge)?;
 
-        self.post_and_stream(provider.host(), provider.path(), &body, on_delta)
+        // Endpoint comes from config (OpenRouter by default; swap to Hack Club AI
+        // or any OpenAI-compatible gateway by editing API_HOST / API_PATH).
+        self.post_and_stream(config::API_HOST, config::API_PATH, &body, on_delta)
             .await
     }
 
@@ -309,17 +313,24 @@ impl Net {
 
         let mut http_buf = [0u8; HTTP_BUF];
 
-        // OpenRouter uses bearer auth (content-type set via .content_type()).
+        // Bearer auth (content-type set via .content_type()). The header is only
+        // sent when a key is configured, so a keyless gateway works with API_KEY
+        // left empty.
         let mut auth: String<128> = String::new();
         auth.push_str("Bearer ").map_err(|_| NetError::Transport)?;
         auth.push_str(config::API_KEY).map_err(|_| NetError::Transport)?;
-        let headers = [("Authorization", auth.as_str())];
+        let auth_header = [("Authorization", auth.as_str())];
+        let headers: &[(&str, &str)] = if config::API_KEY.is_empty() {
+            &[]
+        } else {
+            &auth_header
+        };
 
         let mut req = client
             .request(Method::POST, &url)
             .await
             .map_err(|_| NetError::Transport)?
-            .headers(&headers)
+            .headers(headers)
             .content_type(ContentType::ApplicationJson)
             .body(body.as_bytes());
 
