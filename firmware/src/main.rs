@@ -71,13 +71,18 @@ const TURN_CAP: usize = 256;
 /// Maximum number of (role, text) turns kept; oldest dropped when full.
 const MAX_TURNS: usize = 6;
 
-/// Selectable models. The first entry is the build-time default `config::MODEL`;
-/// the rest are alternates reachable through the same OpenRouter endpoint.
-const MODELS: &[&str] = &[
-    config::MODEL,
-    "deepseek/deepseek-chat",
-    "deepseek/deepseek-r1:free",
-];
+/// An OpenAI-compatible chat endpoint, selectable on-device. The list lives in
+/// `config::PROVIDERS` (so users fill in their own keys), and each provider
+/// carries its own model menu since model ids differ between gateways
+/// (e.g. OpenRouter vs Hack Club AI).
+pub struct Provider {
+    pub name: &'static str,
+    pub host: &'static str,
+    pub path: &'static str,
+    /// Sent as `Authorization: Bearer <key>`; empty string = no auth header.
+    pub key: &'static str,
+    pub models: &'static [&'static str],
+}
 
 /// Selectable personas: a label plus an optional system prompt (None = default,
 /// no system message). Fed to `send_chat` as the `system` argument.
@@ -100,6 +105,9 @@ type Turn = (Role, HString<TURN_CAP>);
 /// On-device settings: selected indices into the compiled option arrays, plus
 /// the live conversation history. Drives every subsequent Send/Expand.
 struct Settings {
+    /// Index into `config::PROVIDERS` — the active API endpoint.
+    provider: usize,
+    /// Index into the active provider's `models`.
     model: usize,
     persona: usize,
     max_tokens: usize,
@@ -117,6 +125,7 @@ struct Settings {
 impl Settings {
     const fn new() -> Self {
         Self {
+            provider: 0,
             model: 0,
             persona: 0,
             max_tokens: 2, // default 1024
@@ -133,8 +142,13 @@ impl Settings {
         &display::THEMES[self.theme]
     }
 
+    /// The active provider (endpoint host/path/key + its model menu).
+    fn provider_def(&self) -> &'static Provider {
+        &config::PROVIDERS[self.provider]
+    }
+    /// The selected model id ("" if the provider lists none — defensive).
     fn model(&self) -> &'static str {
-        MODELS[self.model]
+        self.provider_def().models.get(self.model).copied().unwrap_or("")
     }
     fn persona(&self) -> Option<&'static str> {
         PERSONAS[self.persona].1
@@ -181,15 +195,16 @@ const GAMES: &[(&str, &str, &str)] = &[
     ),
 ];
 
-const ROW_MODEL: usize = 0;
-const ROW_PERSONA: usize = 1;
-const ROW_THEME: usize = 2;
-const ROW_TOKENS: usize = 3;
-const ROW_BRIGHTNESS: usize = 4;
-const ROW_VOLUME: usize = 5;
-const ROW_NEWCONV: usize = 6;
+const ROW_PROVIDER: usize = 0;
+const ROW_MODEL: usize = 1;
+const ROW_PERSONA: usize = 2;
+const ROW_THEME: usize = 3;
+const ROW_TOKENS: usize = 4;
+const ROW_BRIGHTNESS: usize = 5;
+const ROW_VOLUME: usize = 6;
+const ROW_NEWCONV: usize = 7;
 /// Quick-prompt rows occupy `[QUICK_BASE, QUICK_BASE + QUICK_PROMPTS.len())`.
-const QUICK_BASE: usize = 7;
+const QUICK_BASE: usize = 8;
 /// Game rows occupy `[GAMES_BASE, GAMES_BASE + GAMES.len())`, after the quick
 /// prompts and before Back.
 const GAMES_BASE: usize = QUICK_BASE + QUICK_PROMPTS.len();
@@ -282,7 +297,11 @@ async fn main(spawner: Spawner) {
     let mut settings = Settings::new();
     let mut history: HVec<Turn, MAX_TURNS> = HVec::new();
     if let Some(saved) = storage::load(&mut flash) {
-        if (saved.model as usize) < MODELS.len() {
+        if (saved.provider as usize) < config::PROVIDERS.len() {
+            settings.provider = saved.provider as usize;
+        }
+        // Clamp the model index to the (now-selected) provider's model list.
+        if (saved.model as usize) < settings.provider_def().models.len() {
             settings.model = saved.model as usize;
         }
         if (saved.persona as usize) < PERSONAS.len() {
@@ -482,8 +501,15 @@ async fn main(spawner: Spawner) {
                             Button::D | Button::L => {
                                 // Increase value.
                                 match settings.cursor {
+                                    ROW_PROVIDER => {
+                                        settings.provider =
+                                            (settings.provider + 1) % config::PROVIDERS.len();
+                                        settings.model = 0; // model lists differ
+                                        save_now = true;
+                                    }
                                     ROW_MODEL => {
-                                        settings.model = (settings.model + 1) % MODELS.len();
+                                        let n = settings.provider_def().models.len().max(1);
+                                        settings.model = (settings.model + 1) % n;
                                         save_now = true;
                                     }
                                     ROW_PERSONA => {
@@ -543,8 +569,21 @@ async fn main(spawner: Spawner) {
                                 redraw = true;
                             }
                             Button::A | Button::J => {
-                                // Decrease value (for sliders + theme cycle back).
+                                // Decrease value (sliders + provider/theme cycle back).
                                 match settings.cursor {
+                                    ROW_PROVIDER => {
+                                        settings.provider = (settings.provider
+                                            + config::PROVIDERS.len()
+                                            - 1)
+                                            % config::PROVIDERS.len();
+                                        settings.model = 0;
+                                        save_now = true;
+                                    }
+                                    ROW_MODEL => {
+                                        let n = settings.provider_def().models.len().max(1);
+                                        settings.model = (settings.model + n - 1) % n;
+                                        save_now = true;
+                                    }
                                     ROW_THEME => {
                                         settings.theme = (settings.theme
                                             + display::THEMES.len()
@@ -704,6 +743,8 @@ fn draw_menu<D>(lcd: &mut D, settings: &Settings, history: &[Turn])
 where
     D: embedded_graphics::draw_target::DrawTarget<Color = embedded_graphics::pixelcolor::Rgb565>,
 {
+    let mut provider_row: HString<32> = HString::new();
+    let _ = write!(provider_row, "API: {}", settings.provider_def().name);
     let mut model_row: HString<48> = HString::new();
     let _ = write!(model_row, "Model: {}", settings.model());
     let mut persona_row: HString<32> = HString::new();
@@ -716,6 +757,7 @@ where
     let _ = write!(newconv_row, "New conversation ({})", history.len());
 
     let mut items: HVec<&str, MENU_ROWS> = HVec::new();
+    let _ = items.push(provider_row.as_str());
     let _ = items.push(model_row.as_str());
     let _ = items.push(persona_row.as_str());
     let _ = items.push(theme_row.as_str());
@@ -765,6 +807,7 @@ fn persist(flash: &mut storage::Flash, settings: &Settings, history: &[Turn]) {
         brightness: settings.brightness,
         volume: settings.volume,
         theme: settings.theme as u8,
+        provider: settings.provider as u8,
         turns,
     };
     storage::save(flash, &data);
@@ -811,6 +854,7 @@ where
     }
 
     let theme = settings.theme();
+    let prov = settings.provider_def();
     net.set_led(true).await;
     let mut acc: HString<RESPONSE_CAP> = HString::new();
 
@@ -831,6 +875,9 @@ where
         );
         let r = net
             .send_chat(
+                prov.host,
+                prov.path,
+                prov.key,
                 settings.model(),
                 settings.max_tokens(),
                 settings.system(),
@@ -900,6 +947,7 @@ where
     D: embedded_graphics::draw_target::DrawTarget<Color = embedded_graphics::pixelcolor::Rgb565>,
 {
     let theme = settings.theme();
+    let prov = settings.provider_def();
     let mut acc: HString<RESPONSE_CAP> = HString::new();
     let _ = Ui::response(lcd, theme, "Rewriting...", "");
     net.set_led(true).await;
@@ -907,6 +955,9 @@ where
     let mut painted_len = 0usize;
     let result = net
         .send_chat(
+            prov.host,
+            prov.path,
+            prov.key,
             settings.model(),
             settings.max_tokens(),
             settings.system(),

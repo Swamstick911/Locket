@@ -219,8 +219,9 @@ impl Net {
 
     /// Stream a single OpenRouter completion for `prompt` (single-turn).
     ///
-    /// Builds the request body with the core [`OpenRouter`] provider (the default
-    /// `config::MODEL` and 1024 max tokens), POSTs it over TLS 1.3, and feeds the
+    /// Builds the request body with the core [`OpenRouter`] provider (the first
+    /// configured provider's first model and 1024 max tokens), POSTs it over TLS
+    /// 1.3, and feeds the
     /// streamed SSE body to the core classifier. `on_delta` is called with each
     /// new text fragment as it arrives; it must not block.
     ///
@@ -232,8 +233,14 @@ impl Net {
     where
         F: FnMut(&str),
     {
+        // Single-turn convenience: use the first provider's first model.
+        let p = &config::PROVIDERS[0];
+        let model = p.models.first().copied().unwrap_or("");
         self.send_chat(
-            config::MODEL,
+            p.host,
+            p.path,
+            p.key,
+            model,
             1024,
             None,
             &[(Role::User, prompt)],
@@ -252,6 +259,9 @@ impl Net {
     /// [`NetError`].
     pub async fn send_chat<F>(
         &mut self,
+        host: &str,
+        path: &str,
+        key: &str,
         model: &str,
         max_tokens: u32,
         system: Option<&str>,
@@ -269,10 +279,9 @@ impl Net {
             .build_chat_body(system, turns, &mut body)
             .map_err(|_| NetError::BodyTooLarge)?;
 
-        // Endpoint comes from config (OpenRouter by default; swap to Hack Club AI
-        // or any OpenAI-compatible gateway by editing API_HOST / API_PATH).
-        self.post_and_stream(config::API_HOST, config::API_PATH, &body, on_delta)
-            .await
+        // Endpoint + key come from the caller's selected provider (OpenRouter or
+        // Hack Club AI, chosen on-device); the body is OpenAI-compatible for both.
+        self.post_and_stream(host, path, key, &body, on_delta).await
     }
 
     /// Shared transport: open TLS to `host`, POST `body` to `path`, and stream
@@ -283,6 +292,7 @@ impl Net {
         &mut self,
         host: &str,
         path: &str,
+        key: &str,
         body: &str,
         mut on_delta: F,
     ) -> Result<u32, NetError>
@@ -318,13 +328,9 @@ impl Net {
         // left empty.
         let mut auth: String<128> = String::new();
         auth.push_str("Bearer ").map_err(|_| NetError::Transport)?;
-        auth.push_str(config::API_KEY).map_err(|_| NetError::Transport)?;
+        auth.push_str(key).map_err(|_| NetError::Transport)?;
         let auth_header = [("Authorization", auth.as_str())];
-        let headers: &[(&str, &str)] = if config::API_KEY.is_empty() {
-            &[]
-        } else {
-            &auth_header
-        };
+        let headers: &[(&str, &str)] = if key.is_empty() { &[] } else { &auth_header };
 
         let mut req = client
             .request(Method::POST, &url)
