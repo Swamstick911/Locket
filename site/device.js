@@ -35,6 +35,8 @@ if (mount) {
   controls.enableDamping = true;
   controls.autoRotate = true;
   controls.autoRotateSpeed = 1.4;
+  // stop the gentle intro spin the moment the user grabs it, so it doesn't fight them
+  controls.addEventListener("start", () => { controls.autoRotate = false; });
 
   // --- the screen: a canvas we draw the Locket UI onto, used as a texture ---
   const cv = document.createElement("canvas");
@@ -107,23 +109,23 @@ if (mount) {
     "sprig.glb",
     (gltf) => {
       const model = gltf.scene;
+      // Orient FIRST (stand the board upright, LCD toward the camera), THEN
+      // recenter — so the geometric centre lands exactly on the orbit target.
+      // (Rotating after centering is what pushed the pivot off to one side.)
+      model.rotation.x = Math.PI / 2;
       scene.add(model);
-      // frame the camera to the model's bounding sphere — robust to its native
-      // scale (don't guess a scale factor; fit the view to it instead)
       const box = new THREE.Box3().setFromObject(model);
       const sphere = box.getBoundingSphere(new THREE.Sphere());
-      model.position.sub(sphere.center); // recenter at the origin
+      model.position.sub(sphere.center);
       const r = sphere.radius || 1;
       const fovr = (camera.fov * Math.PI) / 180;
-      const dist = (r / Math.sin(fovr / 2)) * 1.08;
-      camera.position.set(0, r * 0.12, dist);
+      const dist = (r / Math.sin(fovr / 2)) * 1.05;
+      camera.position.set(0, 0, dist); // straight-on: screen front and centre
       camera.near = dist / 100;
       camera.far = dist * 100;
       camera.updateProjectionMatrix();
       controls.target.set(0, 0, 0);
       controls.update();
-      model.rotation.x = Math.PI / 2; // stand it up, LCD face toward the camera
-      model.rotation.y = 0.35; // slight 3/4 turn
 
       // find the screen mesh and put our canvas on its "Glow Glass" material
       let glass = null;
