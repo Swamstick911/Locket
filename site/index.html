@@ -16,6 +16,7 @@
     <a href="#demo">demo</a>
     <a href="#build">build</a>
     <a href="#use">use</a>
+    <a href="#term">talk</a>
     <a href="https://github.com/Swamstick911/Locket" target="_blank" rel="noopener">github ↗</a>
   </nav>
   <div class="themes" role="group" aria-label="Theme">
@@ -41,6 +42,9 @@
         <a class="btn" href="#demo">▶ Watch it work</a>
         <a class="btn ghost" href="#build">Build your own</a>
       </div>
+      <ul class="tags">
+        <li>Rust</li><li>no_std</li><li>Embassy</li><li>WiFi streaming</li><li>8 buttons</li>
+      </ul>
     </div>
 
     <!-- the real Sprig, in 3D, with its screen running the Locket firmware -->
@@ -125,6 +129,19 @@ elf2uf2-rs target/thumbv6m-none-eabi/release/sprig-llm-firmware sprig.uf2</code>
       <div class="key"><span class="k">L</span><p>Space — or accept the highlighted word.</p></div>
       <div class="key"><span class="k">hold L</span><p>Action menu: send, expand-with-AI, backspace, settings…</p></div>
       <div class="key"><span class="k">in a reply</span><p>Scroll with up/down, or send it to your PC over USB.</p></div>
+    </div>
+  </section>
+
+  <!-- interactive terminal -->
+  <section id="term" class="band">
+    <h2><span class="hash">#</span> talk to it</h2>
+    <p class="term-intro">This whole site runs on terminal energy, so — type a command. Start with <b>help</b>.</p>
+    <div class="terminal" id="terminal">
+      <div class="term-out" id="termOut"></div>
+      <div class="term-line">
+        <span class="prompt">locket@web</span>:~$&nbsp;<input id="termIn" type="text" autocomplete="off"
+          autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="terminal command input">
+      </div>
     </div>
   </section>
 

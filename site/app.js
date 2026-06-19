@@ -33,6 +33,58 @@ if (typed) {
   setTimeout(tick, 350);
 }
 
+// --- interactive terminal section ---
+const termIn = document.getElementById("termIn");
+const termOut = document.getElementById("termOut");
+const terminalEl = document.getElementById("terminal");
+if (termIn && termOut && terminalEl) {
+  const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const print = (html, cls) => {
+    const d = document.createElement("div");
+    d.className = "line" + (cls ? " " + cls : "");
+    d.innerHTML = html;
+    termOut.appendChild(d);
+    terminalEl.scrollTop = terminalEl.scrollHeight;
+  };
+  const goto = (id, msg) => { print(msg); const el = document.getElementById(id); if (el) el.scrollIntoView({ behavior: "smooth" }); };
+
+  const CMDS = {
+    help: () => print("commands: <b>help about poem demo build use github theme whoami clear</b><br>theme &lt;phosphor|dark|gameboy&gt;"),
+    about: () => print("Locket — a whole AI chat terminal that fits in your pocket. A Hack Club Sprig, reprogrammed in Rust. Try <b>demo</b> to watch it or <b>build</b> to make one."),
+    poem: () => print("A library shrunken to a locket of light,<br>Circuits hum low in the denim night;<br>With thumb-sized thunder I summon the net,<br>A quiet cosmos I carry in my pocket.", "accent"),
+    demo: () => goto("demo", "rolling the demo…"),
+    build: () => goto("build", "here's how to build your own…"),
+    use: () => goto("use", "the controls…"),
+    github: () => { print("opening the repo ↗"); window.open("https://github.com/Swamstick911/Locket", "_blank", "noopener"); },
+    repo: () => CMDS.github(),
+    whoami: () => print("a curious human, poking at a pocket AI's website."),
+    vercel: () => print("soon — this'll be live on Vercel."),
+    clear: () => { termOut.innerHTML = ""; },
+  };
+
+  function run(raw) {
+    const input = raw.trim();
+    if (!input) return;
+    print('<span class="prompt">locket@web</span>:~$ ' + esc(input));
+    const [cmd, ...args] = input.split(/\s+/);
+    const c = cmd.toLowerCase();
+    if (c === "theme") {
+      const map = { phosphor: "phosphor", dark: "modern", modern: "modern", gameboy: "gameboy", gb: "gameboy" };
+      const want = map[(args[0] || "").toLowerCase()];
+      if (want) { applyTheme(want); print("theme → " + want); }
+      else print("usage: theme &lt;phosphor|dark|gameboy&gt;", "warn");
+    } else if (CMDS[c]) {
+      CMDS[c]();
+    } else {
+      print("command not found: " + esc(c) + " — try <b>help</b>", "warn");
+    }
+  }
+
+  print("Locket web terminal — type <b>help</b> to begin.", "muted");
+  termIn.addEventListener("keydown", (e) => { if (e.key === "Enter") { run(termIn.value); termIn.value = ""; } });
+  terminalEl.addEventListener("click", () => termIn.focus());
+}
+
 // --- the device screen: cycle through firmware "scenes" on a loop ---
 const scr = document.getElementById("scr");
 if (scr) {

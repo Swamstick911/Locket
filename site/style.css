@@ -82,7 +82,8 @@ html { scrollbar-color: var(--dim) var(--bg); scrollbar-width: thin; }
 ::-webkit-scrollbar-thumb:hover { background:var(--accent); }
 
 /* ---- hero (text + device) ---- */
-.hero { display:grid; grid-template-columns:1.05fr .95fr; gap:40px; align-items:center; padding:54px 0 48px; }
+.hero { display:grid; grid-template-columns:1.05fr .95fr; gap:40px; align-items:center;
+  min-height:calc(100vh - 130px); padding:36px 0 48px; }
 .cmd { margin:0 0 8px; color:var(--dim); font-size:14px; }
 .prompt { color:var(--accent); }
 .cursor { display:inline-block; width:9px; height:17px; background:var(--accent);
@@ -102,6 +103,8 @@ html { scrollbar-color: var(--dim) var(--bg); scrollbar-width: thin; }
 .btn:hover { border-color:var(--accent); filter:brightness(1.08); box-shadow:var(--glow); }
 .btn.ghost { background:transparent; color:var(--text); border-color:var(--divider); }
 .btn.ghost:hover { border-color:var(--text); filter:none; }
+.tags { list-style:none; display:flex; flex-wrap:wrap; gap:8px; margin:24px 0 0; padding:0; }
+.tags li { font-size:12px; color:var(--dim); border:1px solid var(--divider); border-radius:20px; padding:3px 12px; }
 
 /* ---- the 3D Sprig model (hackclub/sprig.glb, MIT) ---- */
 .hero-device { display:flex; flex-direction:column; align-items:center; }
@@ -165,6 +168,24 @@ html { scrollbar-color: var(--dim) var(--bg); scrollbar-width: thin; }
 .key .k { display:inline-block; background:var(--accent); color:var(--on-accent);
   font-weight:700; padding:2px 9px; border-radius:5px; font-size:13px; margin-bottom:8px; }
 .key p { margin:0; color:var(--dim); font-size:14px; }
+
+/* ---- interactive terminal ---- */
+.term-intro { color:var(--dim); margin:0 0 18px; max-width:60ch; }
+.terminal {
+  background:var(--bg); border:1px solid var(--divider); border-radius:8px;
+  padding:14px 16px; height:320px; overflow-y:auto; cursor:text; font-size:14px;
+  box-shadow:inset 0 0 40px rgba(0,0,0,.25);
+}
+.terminal .line { line-height:1.65; white-space:pre-wrap; word-break:break-word; color:var(--text); }
+.terminal .line.accent { color:var(--accent); text-shadow:var(--glow); }
+.terminal .line.warn { color:var(--warn); }
+.terminal .line.muted { color:var(--dim); }
+.term-line { display:flex; align-items:center; margin-top:4px; }
+.terminal .prompt { color:var(--accent); }
+.terminal input {
+  flex:1; min-width:0; background:transparent; border:0; outline:none;
+  color:var(--text); font:inherit; padding:0;
+}
 
 /* ---- footer ---- */
 .foot { border-top:1px dashed var(--divider); margin-top:30px; padding:46px 20px 60px; text-align:center; }
