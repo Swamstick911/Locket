@@ -43,35 +43,10 @@
       </div>
     </div>
 
-    <!-- a stylised Sprig, with its screen running the Locket firmware -->
-    <div class="hero-device" aria-hidden="true">
-      <div class="sprig">
-        <div class="sprig-head"><span class="led"></span><span class="silk">LOCKET</span></div>
-        <div class="sprig-screen">
-          <div class="scr" id="scr" data-scene="boot">
-            <div class="sc sc-boot">
-              <div class="boot-title">Locket</div>
-              <div class="boot-ver">v0.1.0 · pocket AI</div>
-              <div class="boot-status">Connecting WiFi<span class="dots"></span></div>
-            </div>
-            <div class="sc sc-compose">
-              <div class="scr-bar"><span>AI: Default</span><span class="wifi"></span></div>
-              <div class="scr-input">explain wifi<span class="cur"></span></div>
-              <div class="scr-chips"><b>L</b>&nbsp;simply&nbsp;&nbsp;<i>simple</i>&nbsp;&nbsp;<i>simpler</i></div>
-              <div class="scr-keys">Wabcd Aefgh Sijkl<br>Iqrst Juvwx Kyz. L=spc</div>
-            </div>
-            <div class="sc sc-reply">
-              <div class="scr-bar"><span>CHAT</span><span class="wifi"></span></div>
-              <div class="scr-reply">&gt;&gt; WiFi is your device<br>chatting with a router<br>by radio — a walkie-<br>talkie for data<span class="cur"></span></div>
-            </div>
-          </div>
-        </div>
-        <div class="sprig-controls">
-          <div class="dpad"><span></span><span></span><span></span><span></span></div>
-          <div class="abxy"><span></span><span></span><span></span><span></span></div>
-        </div>
-        <div class="speaker"><i></i><i></i><i></i><i></i><i></i></div>
-      </div>
+    <!-- the real Sprig, in 3D, with its screen running the Locket firmware -->
+    <div class="hero-device">
+      <div id="sprig3d" class="sprig3d"></div>
+      <p class="model-hint">drag to spin · <span>3D model © Hack Club · MIT</span></p>
     </div>
   </section>
 
@@ -167,5 +142,12 @@ A quiet cosmos I carry in my pocket.</pre>
 </footer>
 
 <script src="app.js"></script>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.183.2/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.183.2/examples/jsm/"
+}}
+</script>
+<script type="module" src="device.js"></script>
 </body>
 </html>
