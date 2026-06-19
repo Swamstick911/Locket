@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="phosphor">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Locket — a whole AI in your pocket</title>
+<meta name="description" content="Locket turns a Hack Club Sprig into a self-contained AI chat terminal. Type on 8 buttons, it answers over WiFi. Built in Rust.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- top bar -->
+<header class="topbar">
+  <a class="brand" href="#top">● locket</a>
+  <nav class="nav">
+    <a href="#demo">demo</a>
+    <a href="#build">build</a>
+    <a href="#use">use</a>
+    <a href="https://github.com/Swamstick911/Locket" target="_blank" rel="noopener">github ↗</a>
+  </nav>
+  <div class="themes" role="group" aria-label="Theme">
+    <button data-set-theme="phosphor" title="Phosphor" aria-label="Phosphor theme">P</button>
+    <button data-set-theme="modern" title="Modern Dark" aria-label="Modern Dark theme">D</button>
+    <button data-set-theme="gameboy" title="Game Boy" aria-label="Game Boy theme">G</button>
+  </div>
+</header>
+
+<main id="top">
+
+  <!-- hero -->
+  <section class="hero">
+    <div class="window">
+      <div class="window-bar"><span class="d"></span><span class="d"></span><span class="d"></span><em>locket — zsh</em></div>
+      <div class="window-body">
+        <p class="cmd"><span class="prompt">visitor@locket</span>:~$ <span id="typed"></span><span class="cursor"></span></p>
+        <div class="reveal">
+          <h1>Locket</h1>
+          <p class="tagline">“a quiet cosmos I carry in my pocket.”</p>
+          <p class="lede">A whole AI chat terminal that fits in your pocket. It runs on a Hack Club
+            <a href="https://sprig.hackclub.com" target="_blank" rel="noopener">Sprig</a> — no phone,
+            no computer. You type on 8 buttons, it answers over WiFi, and the reply streams onto the
+            little screen. All software, all Rust.</p>
+          <div class="cta">
+            <a class="btn" href="#demo">▶ Watch it work</a>
+            <a class="btn ghost" href="#build">Build your own</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- demo -->
+  <section id="demo" class="band">
+    <h2><span class="hash">#</span> see it run</h2>
+    <div class="device">
+      <div class="device-screen">
+        <video controls playsinline poster="poster.png">
+          <source src="demo.mp4" type="video/mp4">
+          Your browser can't play this video — <a href="demo.mp4">download it here</a>.
+        </video>
+      </div>
+      <div class="device-foot"><span class="dpad"></span><span class="ab"></span></div>
+    </div>
+    <p class="caption">Typed on 8 buttons, answered over WiFi. The name? It's the first line it
+      ever wrote me: <em>“a library shrunken to a locket of light.”</em></p>
+  </section>
+
+  <!-- what it is -->
+  <section id="what" class="band alt">
+    <h2><span class="hash">#</span> what it does</h2>
+    <ul class="feat">
+      <li><b>Talks to an AI over WiFi</b> with the whole conversation remembered, streaming live to the 160×128 screen.</li>
+      <li><b>Switch providers on the device</b> — OpenRouter, or Hack Club AI (free) — plus model switching.</li>
+      <li><b>Types on just 8 buttons</b> with a two-stage keyboard and word prediction, so you grab whole words instead of tapping every letter.</li>
+      <li><b>Three themes</b> you flip between — phosphor terminal, modern dark, and Game Boy. (This site has them too. Try the buttons up top.)</li>
+      <li><b>Plays AI games</b> — a text adventure, 20 Questions, trivia.</li>
+      <li><b>Types into your PC</b> over USB, like a tiny keyboard.</li>
+      <li><b>Remembers everything</b> — settings and your last chat survive a power-off.</li>
+    </ul>
+  </section>
+
+  <!-- build -->
+  <section id="build" class="band">
+    <h2><span class="hash">#</span> build your own</h2>
+    <p class="step-intro">Your WiFi and API key get compiled in, so you build your own copy. About
+      fifteen minutes the first time — mostly the computer compiling while you grab a drink.</p>
+
+    <ol class="steps">
+      <li>
+        <h3>Get the tools <span class="once">(once)</span></h3>
+        <p>Install <a href="https://rustup.rs" target="_blank" rel="noopener">Rust</a>, then add the chip Locket uses and the flashing tool:</p>
+        <pre class="code"><code>rustup target add thumbv6m-none-eabi
+cargo install elf2uf2-rs</code><button class="copy">copy</button></pre>
+      </li>
+      <li>
+        <h3>Grab the code</h3>
+        <pre class="code"><code>git clone https://github.com/Swamstick911/Locket.git
+cd Locket</code><button class="copy">copy</button></pre>
+      </li>
+      <li>
+        <h3>Add your details</h3>
+        <p>Copy the example config (the real one is gitignored, so your keys never get pushed):</p>
+        <pre class="code"><code>cp firmware/src/config.example.rs firmware/src/config.rs</code><button class="copy">copy</button></pre>
+        <p>Open <code>config.rs</code> and fill in your <b>2.4&nbsp;GHz</b> WiFi, plus a key + model for
+          a provider — <a href="https://openrouter.ai/keys" target="_blank" rel="noopener">OpenRouter</a>
+          or <a href="https://ai.hackclub.com" target="_blank" rel="noopener">Hack Club AI</a> (free).</p>
+      </li>
+      <li>
+        <h3>Build &amp; flash</h3>
+        <p>Build it, then hold <b>BOOTSEL</b> while plugging in the board (a <code>RPI-RP2</code>
+          drive appears), make the <code>.uf2</code>, and drop it on that drive:</p>
+        <pre class="code"><code>cd firmware
+cargo build --release
+elf2uf2-rs target/thumbv6m-none-eabi/release/sprig-llm-firmware sprig.uf2</code><button class="copy">copy</button></pre>
+        <p>It reboots itself and you're in. Power it from any USB plug or a power bank afterward.</p>
+      </li>
+    </ol>
+  </section>
+
+  <!-- use -->
+  <section id="use" class="band alt">
+    <h2><span class="hash">#</span> using it</h2>
+    <div class="keys">
+      <div class="key"><span class="k">tap, tap</span><p>Type a letter: tap its group, then the letter.</p></div>
+      <div class="key"><span class="k">I / J / K</span><p>On the letter screen, the right pad grabs a whole predicted word.</p></div>
+      <div class="key"><span class="k">L</span><p>Space — or accept the highlighted word.</p></div>
+      <div class="key"><span class="k">hold L</span><p>Action menu: send, expand-with-AI, backspace, settings…</p></div>
+      <div class="key"><span class="k">in a reply</span><p>Scroll with up/down, or send it to your PC over USB.</p></div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="foot">
+  <pre class="poem">A library shrunken to a locket of light,
+Circuits hum low in the denim night;
+With thumb-sized thunder I summon the net,
+A quiet cosmos I carry in my pocket.</pre>
+  <p class="meta">
+    <a href="https://github.com/Swamstick911/Locket" target="_blank" rel="noopener">github.com/Swamstick911/Locket</a>
+    · MIT · made by Swamstick911
+  </p>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>

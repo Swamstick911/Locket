@@ -1,0 +1,187 @@
+/* ---- themes : mirror the firmware's Theme struct ---- */
+:root[data-theme="phosphor"] {
+  --bg:#0A140A; --text:#33FF66; --dim:#1f8a3a;
+  --surface:#0d2417; --surface-text:#AFFFC0; --divider:#16522a;
+  --accent:#AFFFC0; --on-accent:#0A140A; --warn:#FFB000;
+  --scan:.16; --glow:0 0 6px rgba(120,255,150,.18);
+}
+:root[data-theme="modern"] {
+  --bg:#121212; --text:#E6E6E6; --dim:#9AA0A6;
+  --surface:#1d1f24; --surface-text:#E6E6E6; --divider:#2e2e2e;
+  --accent:#4DD0E1; --on-accent:#06222a; --warn:#FF6B6B;
+  --scan:.04; --glow:none;
+}
+:root[data-theme="gameboy"] {
+  --bg:#9BBC0F; --text:#0F380F; --dim:#3a5a17;
+  --surface:#306230; --surface-text:#9BBC0F; --divider:#0F380F;
+  --accent:#0F380F; --on-accent:#9BBC0F; --warn:#8a3b14;
+  --scan:0; --glow:none;
+}
+
+* { box-sizing:border-box; }
+html { scroll-behavior:smooth; }
+body {
+  margin:0;
+  background:var(--bg);
+  color:var(--text);
+  font-family:"DejaVu Sans Mono","SF Mono",ui-monospace,Consolas,monospace;
+  font-size:16px; line-height:1.6;
+  -webkit-font-smoothing:antialiased;
+  transition:background .25s, color .25s;
+}
+/* scanline + faint vignette overlay, strength per theme */
+body::after {
+  content:""; position:fixed; inset:0; pointer-events:none; z-index:9999;
+  background:repeating-linear-gradient(180deg, transparent 0 2px, rgba(0,0,0,var(--scan)) 2px 3px);
+  mix-blend-mode:multiply;
+}
+a { color:var(--accent); text-decoration:none; border-bottom:1px solid transparent; }
+a:hover { border-bottom-color:var(--accent); }
+h1,h2,h3 { font-weight:700; letter-spacing:.5px; }
+.hash { color:var(--dim); }
+em { color:var(--accent); font-style:italic; }
+
+/* ---- top bar ---- */
+.topbar {
+  position:sticky; top:0; z-index:50;
+  display:flex; align-items:center; gap:18px;
+  padding:11px 20px;
+  background:color-mix(in srgb, var(--bg) 82%, transparent);
+  backdrop-filter:blur(6px);
+  border-bottom:1px solid var(--divider);
+}
+.brand { color:var(--text); font-weight:700; letter-spacing:1px; }
+.brand:hover { border:0; text-shadow:var(--glow); }
+.nav { display:flex; gap:16px; margin-left:auto; font-size:14px; }
+.nav a { color:var(--dim); }
+.nav a:hover { color:var(--text); border:0; }
+.themes { display:flex; gap:5px; }
+.themes button {
+  width:26px; height:26px; cursor:pointer;
+  background:transparent; color:var(--dim);
+  border:1px solid var(--divider); border-radius:5px;
+  font-family:inherit; font-size:12px; font-weight:700;
+  transition:all .15s;
+}
+.themes button:hover { color:var(--text); border-color:var(--text); }
+.themes button[aria-pressed="true"] {
+  background:var(--accent); color:var(--on-accent); border-color:var(--accent);
+}
+
+/* ---- layout ---- */
+main { max-width:860px; margin:0 auto; padding:0 20px; }
+.band { padding:64px 0; border-top:1px dashed var(--divider); }
+.band.alt { } /* hook for alternating treatment if needed */
+.band h2 { font-size:22px; margin:0 0 26px; }
+
+/* ---- hero ---- */
+.hero { padding:54px 0 40px; }
+.window {
+  border:1px solid var(--divider); border-radius:10px; overflow:hidden;
+  box-shadow:0 18px 50px rgba(0,0,0,.35);
+}
+.window-bar {
+  display:flex; align-items:center; gap:7px;
+  padding:9px 13px; background:var(--surface); color:var(--surface-text);
+  border-bottom:1px solid var(--divider); font-size:13px;
+}
+.window-bar .d { width:11px; height:11px; border-radius:50%; background:var(--divider); }
+.window-bar em { margin-left:8px; color:var(--surface-text); opacity:.7; font-style:normal; }
+.window-body { padding:26px 26px 40px; }
+.cmd { margin:0 0 8px; color:var(--dim); font-size:14px; }
+.prompt { color:var(--accent); }
+.cursor { display:inline-block; width:9px; height:17px; background:var(--accent);
+  vertical-align:-3px; margin-left:1px; animation:blink 1.05s steps(1) infinite; }
+@keyframes blink { 50% { opacity:0; } }
+.reveal h1 {
+  font-size:clamp(48px,11vw,92px); line-height:1; margin:18px 0 6px;
+  letter-spacing:2px; text-shadow:var(--glow);
+}
+.tagline { color:var(--accent); font-size:clamp(15px,2.6vw,20px); margin:0 0 20px; }
+.lede { color:var(--text); max-width:62ch; margin:0 0 26px; }
+.lede a { border-bottom:1px solid var(--accent); }
+.cta { display:flex; gap:12px; flex-wrap:wrap; }
+.btn {
+  display:inline-block; padding:11px 18px; border-radius:7px;
+  background:var(--accent); color:var(--on-accent); font-weight:700;
+  border:1px solid var(--accent);
+}
+.btn:hover { border-color:var(--accent); filter:brightness(1.08); box-shadow:var(--glow); }
+.btn.ghost { background:transparent; color:var(--text); border-color:var(--divider); }
+.btn.ghost:hover { border-color:var(--text); filter:none; }
+
+/* ---- demo device ---- */
+.device { max-width:560px; margin:0 auto; }
+.device-screen {
+  background:#000; border:3px solid var(--divider); border-radius:10px 10px 4px 4px;
+  padding:10px; box-shadow:var(--glow);
+}
+.device-screen video { width:100%; display:block; border-radius:3px; background:#000; }
+.device-foot {
+  display:flex; align-items:center; justify-content:space-between;
+  background:var(--surface); border:3px solid var(--divider); border-top:0;
+  border-radius:0 0 14px 14px; padding:14px 22px;
+}
+.device-foot .dpad { width:22px; height:22px; background:var(--surface-text); opacity:.5;
+  clip-path:polygon(35% 0,65% 0,65% 35%,100% 35%,100% 65%,65% 65%,65% 100%,35% 100%,35% 65%,0 65%,0 35%,35% 35%); }
+.device-foot .ab { width:14px; height:14px; border-radius:50%; background:var(--surface-text); opacity:.5; }
+.caption { text-align:center; color:var(--dim); max-width:60ch; margin:22px auto 0; font-size:14px; }
+
+/* ---- features ---- */
+.feat { list-style:none; padding:0; margin:0; display:grid; gap:14px; }
+.feat li { padding-left:22px; position:relative; color:var(--dim); }
+.feat li::before { content:"▹"; position:absolute; left:0; color:var(--accent); }
+.feat b { color:var(--text); font-weight:700; }
+
+/* ---- build steps ---- */
+.step-intro { color:var(--dim); max-width:64ch; margin:0 0 30px; }
+.steps { list-style:none; counter-reset:s; padding:0; margin:0; }
+.steps > li { counter-increment:s; padding:0 0 28px 44px; position:relative; }
+.steps > li::before {
+  content:counter(s); position:absolute; left:0; top:0;
+  width:28px; height:28px; display:grid; place-items:center;
+  border:1px solid var(--accent); color:var(--accent); border-radius:50%;
+  font-size:14px; font-weight:700;
+}
+.steps h3 { font-size:16px; margin:3px 0 9px; }
+.steps .once { color:var(--dim); font-weight:400; }
+.steps p { color:var(--dim); margin:0 0 11px; max-width:62ch; }
+.steps p code, .lede code, .caption code { background:var(--surface); color:var(--surface-text);
+  padding:1px 5px; border-radius:3px; font-size:.92em; }
+
+.code {
+  position:relative; margin:0 0 4px;
+  background:var(--surface); color:var(--surface-text);
+  border:1px solid var(--divider); border-radius:7px;
+  padding:13px 15px; overflow-x:auto;
+}
+.code code { font-size:13.5px; line-height:1.7; white-space:pre; }
+.copy {
+  position:absolute; top:8px; right:8px;
+  background:transparent; color:var(--surface-text); opacity:.55;
+  border:1px solid var(--divider); border-radius:5px;
+  font-family:inherit; font-size:11px; padding:3px 8px; cursor:pointer;
+}
+.copy:hover { opacity:1; border-color:var(--surface-text); }
+.copy.done { color:var(--accent); border-color:var(--accent); opacity:1; }
+
+/* ---- controls ---- */
+.keys { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:14px; }
+.key { border:1px solid var(--divider); border-radius:8px; padding:14px; }
+.key .k { display:inline-block; background:var(--accent); color:var(--on-accent);
+  font-weight:700; padding:2px 9px; border-radius:5px; font-size:13px; margin-bottom:8px; }
+.key p { margin:0; color:var(--dim); font-size:14px; }
+
+/* ---- footer ---- */
+.foot { border-top:1px dashed var(--divider); margin-top:30px; padding:46px 20px 60px; text-align:center; }
+.poem { display:inline-block; text-align:left; color:var(--accent); margin:0 0 22px;
+  font-size:14px; line-height:1.8; text-shadow:var(--glow); white-space:pre-wrap; }
+.foot .meta { color:var(--dim); font-size:13px; margin:0; }
+.foot .meta a { color:var(--dim); }
+.foot .meta a:hover { color:var(--text); border:0; }
+
+@media (max-width:560px){
+  .window-body { padding:20px 16px 30px; }
+  .nav { display:none; }
+  .band { padding:48px 0; }
+}
