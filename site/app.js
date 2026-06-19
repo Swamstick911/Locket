@@ -33,6 +33,17 @@ if (typed) {
   setTimeout(tick, 350);
 }
 
+// --- the device screen: cycle through firmware "scenes" on a loop ---
+const scr = document.getElementById("scr");
+if (scr) {
+  const scenes = ["boot", "compose", "reply"];
+  let si = 0;
+  setInterval(() => {
+    si = (si + 1) % scenes.length;
+    scr.setAttribute("data-scene", scenes[si]);
+  }, 2600);
+}
+
 // --- copy buttons on code blocks ---
 document.querySelectorAll("pre.code .copy").forEach((btn) => {
   btn.addEventListener("click", async () => {

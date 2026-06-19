@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Locket — a whole AI in your pocket</title>
+<title>Locket</title>
 <meta name="description" content="Locket turns a Hack Club Sprig into a self-contained AI chat terminal. Type on 8 buttons, it answers over WiFi. Built in Rust.">
 <link rel="stylesheet" href="style.css">
 </head>
@@ -29,22 +29,48 @@
 
   <!-- hero -->
   <section class="hero">
-    <div class="window">
-      <div class="window-bar"><span class="d"></span><span class="d"></span><span class="d"></span><em>locket — zsh</em></div>
-      <div class="window-body">
-        <p class="cmd"><span class="prompt">visitor@locket</span>:~$ <span id="typed"></span><span class="cursor"></span></p>
-        <div class="reveal">
-          <h1>Locket</h1>
-          <p class="tagline">“a quiet cosmos I carry in my pocket.”</p>
-          <p class="lede">A whole AI chat terminal that fits in your pocket. It runs on a Hack Club
-            <a href="https://sprig.hackclub.com" target="_blank" rel="noopener">Sprig</a> — no phone,
-            no computer. You type on 8 buttons, it answers over WiFi, and the reply streams onto the
-            little screen. All software, all Rust.</p>
-          <div class="cta">
-            <a class="btn" href="#demo">▶ Watch it work</a>
-            <a class="btn ghost" href="#build">Build your own</a>
+    <div class="hero-text">
+      <p class="cmd"><span class="prompt">visitor@locket</span>:~$ <span id="typed"></span><span class="cursor"></span></p>
+      <h1>Locket</h1>
+      <p class="tagline">“a quiet cosmos I carry in my pocket.”</p>
+      <p class="lede">A whole AI chat terminal that fits in your pocket. It runs on a Hack Club
+        <a href="https://sprig.hackclub.com" target="_blank" rel="noopener">Sprig</a> — no phone,
+        no computer. You type on 8 buttons, it answers over WiFi, and the reply streams onto the
+        little screen. All software, all Rust.</p>
+      <div class="cta">
+        <a class="btn" href="#demo">▶ Watch it work</a>
+        <a class="btn ghost" href="#build">Build your own</a>
+      </div>
+    </div>
+
+    <!-- a stylised Sprig, with its screen running the Locket firmware -->
+    <div class="hero-device" aria-hidden="true">
+      <div class="sprig">
+        <div class="sprig-head"><span class="led"></span><span class="silk">LOCKET</span></div>
+        <div class="sprig-screen">
+          <div class="scr" id="scr" data-scene="boot">
+            <div class="sc sc-boot">
+              <div class="boot-title">Locket</div>
+              <div class="boot-ver">v0.1.0 · pocket AI</div>
+              <div class="boot-status">Connecting WiFi<span class="dots"></span></div>
+            </div>
+            <div class="sc sc-compose">
+              <div class="scr-bar"><span>AI: Default</span><span class="wifi"></span></div>
+              <div class="scr-input">explain wifi<span class="cur"></span></div>
+              <div class="scr-chips"><b>L</b>&nbsp;simply&nbsp;&nbsp;<i>simple</i>&nbsp;&nbsp;<i>simpler</i></div>
+              <div class="scr-keys">Wabcd Aefgh Sijkl<br>Iqrst Juvwx Kyz. L=spc</div>
+            </div>
+            <div class="sc sc-reply">
+              <div class="scr-bar"><span>CHAT</span><span class="wifi"></span></div>
+              <div class="scr-reply">&gt;&gt; WiFi is your device<br>chatting with a router<br>by radio — a walkie-<br>talkie for data<span class="cur"></span></div>
+            </div>
           </div>
         </div>
+        <div class="sprig-controls">
+          <div class="dpad"><span></span><span></span><span></span><span></span></div>
+          <div class="abxy"><span></span><span></span><span></span><span></span></div>
+        </div>
+        <div class="speaker"><i></i><i></i><i></i><i></i><i></i></div>
       </div>
     </div>
   </section>
@@ -54,7 +80,7 @@
     <h2><span class="hash">#</span> see it run</h2>
     <div class="device">
       <div class="device-screen">
-        <video controls playsinline poster="poster.png">
+        <video controls playsinline>
           <source src="demo.mp4" type="video/mp4">
           Your browser can't play this video — <a href="demo.mp4">download it here</a>.
         </video>
