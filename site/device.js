@@ -109,11 +109,12 @@ if (mount) {
     "sprig.glb",
     (gltf) => {
       const model = gltf.scene;
-      // Orient FIRST (stand the board upright, LCD toward the camera), THEN
-      // recenter — so the geometric centre lands exactly on the orbit target.
-      // (Rotating after centering is what pushed the pivot off to one side.)
-      model.rotation.x = Math.PI / 2;
       scene.add(model);
+      // Orient FIRST, then recenter — so the geometric centre lands exactly on
+      // the orbit target. World-axis rotations: tip the LCD toward the camera,
+      // then spin it in-plane so the board sits LANDSCAPE (how a Sprig is held).
+      model.rotateOnWorldAxis(new THREE.Vector3(1, 0, 0), Math.PI / 2);
+      model.rotateOnWorldAxis(new THREE.Vector3(0, 0, 1), -Math.PI / 2);
       const box = new THREE.Box3().setFromObject(model);
       const sphere = box.getBoundingSphere(new THREE.Sphere());
       model.position.sub(sphere.center);
