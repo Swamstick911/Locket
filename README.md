@@ -5,7 +5,14 @@ Locket is a firmware for [Sprig](https://sprig.hackclub.com) that can make it ru
 This name actually has a great story behind it, when I was making this project and was in its developmental stage, to make sure the AI in it worked, I asked it to write a poem about a small device and it's first line was *A library shrunken to a locket of light* and that actually made me go like *Woaaahhhh!!* and thought to name it **Locket** after this specific line.
 
 ### Can I see it working?
-Sure! You can see it either in the [website](https://locket-azure.vercel.app) or also [here](https://github.com/user-attachments/assets/2c7b3b82-ad65-4eb5-9531-32f6edc49ca4)!
+Sure! You can see it in the [website](https://locket-azure.vercel.app)!
+
+The video:
+
+
+https://github.com/user-attachments/assets/8e1b1358-631c-4c56-8978-ff09020e38d2
+
+
 
 ### Woah! What all things it can do?
 Welp, it can do a LOT of thingssssss... *Like?* Like..
